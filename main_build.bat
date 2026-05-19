@@ -304,7 +304,7 @@ if not exist "%COMPILER_DIR%\php8embed.lib" (
     )
 )
 cd /d "%FRAMEWORK_ROOT%"
-"%SWOOLE_COMPILER%" "apps\%APP_NAME%\project.yml" -f
+"%SWOOLE_COMPILER%" "apps\%APP_NAME%\project.yml" --debug-info -f
 set "AOT_EXIT=!errorlevel!"
 if !AOT_EXIT! neq 0 (
     echo.
