@@ -2,13 +2,13 @@
 
 /**
  * BaseRenderer - 泛化数据驱动渲染器 (v6 M1)
- * 
+ *
  * 支持分段布局: 通过 attachLayout/detachLayout 管理活跃布局列表。
  * 支持渲染抽象: 通过 RenderContext 进行后端无关绘制。
  * 保持两阶段分层渲染逻辑 (v5 M3 layer 机制)。
  *
  * AOT 限制:
- *   - 不支持 $fn() 变量函数调用 → 使用 callLayoutSegment() 显式分发
+ *   - foreach 遍历关联数组时 key 类型推断错误 → 使用 array_keys() + for 循环
  *   - 函数返回嵌套数组后子数组类型丢失 → 使用 (array) 类型转换修复
  */
 class BaseRenderer
@@ -26,27 +26,35 @@ class BaseRenderer
     }
 
     /** v6 M1: 挂载组件布局到渲染列表 */
-    public function attachLayout(string $name, int $layoutIdx): void
+    public function attachLayout(string $name): void
     {
-        $this->activeLayouts[$name] = $layoutIdx;
+      
+        $this->activeLayouts[$name] = 1;
         $this->component->onAttach($name);
     }
 
     /** v6 M1: 从渲染列表卸载组件布局 */
     public function detachLayout(string $name): void
     {
+      
         unset($this->activeLayouts[$name]);
         $this->component->onDetach($name);
     }
 
-    /** v6 M1: 获取所有活跃布局合并后的数据 */
+    /**
+     * 获取所有活跃布局合并后的数据
+     * AOT 修复: array_keys() + for 循环, 避免 foreach 遍历关联数组时的类型推断问题
+     */
     public function getActiveLayout(): array
     {
         $allElements = []; $allButtons = [];
-        foreach ($this->activeLayouts as $name => $idx) {
+
+        foreach ($this->activeLayouts as $name => $tem_) {
+        
             $seg = callLayoutSegment($name);
-            foreach ((array) $seg['elements'] as $el) $allElements[] = $el;
-            foreach ((array) $seg['buttons'] as $btn) $allButtons[] = $btn;
+            
+            foreach ((array)$seg['elements'] as $el) $allElements[] = $el;
+            foreach ((array)$seg['buttons'] as $btn) $allButtons[] = $btn;
         }
         return ['elements' => $allElements, 'buttons' => $allButtons];
     }
@@ -118,8 +126,7 @@ class BaseRenderer
     /**
      * 数据驱动渲染: 两阶段分层渲染 (v5 M3 + v6 M1 activeLayouts)
      *
-     * AOT: 布局数据收集直接内联, 不经过函数返回值提取,
-     * 避免 AOT 嵌套数组类型损坏 (子数组变 int)
+     * AOT 修复: array_keys() + for 循环, 避免 foreach 遍历关联数组时的类型推断问题
      */
     public function render(): void
     {
@@ -129,11 +136,15 @@ class BaseRenderer
         $hdc = $this->ctx->beginFrame($this->hWnd);
 
         // v6 M1: 从 activeLayouts 动态收集布局数据
+        // AOT 修复: array_keys() + for 循环
         $elements = []; $buttons = [];
-        foreach ($this->activeLayouts as $name => $idx) {
+        $layoutNames = array_keys($this->activeLayouts);
+        $count = count($layoutNames);
+        for ($i = 0; $i < $count; $i++) {
+            $name = strval($layoutNames[$i]);
             $seg = callLayoutSegment($name);
-            foreach ((array) $seg['elements'] as $el) $elements[] = $el;
-            foreach ((array) $seg['buttons'] as $btn) $buttons[] = $btn;
+            foreach ((array)$seg['elements'] as $el) $elements[] = $el;
+            foreach ((array)$seg['buttons'] as $btn) $buttons[] = $btn;
         }
 
         // ====== Phase 1: 确定最高活跃层 ======

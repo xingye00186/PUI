@@ -41,9 +41,11 @@ class Application
         $this->renderer = new BaseRenderer($this->hWnd, $this->component, $this->ctx);
         // v6 M1: 动态注册所有编译器生成的布局段
         $segNames = getLayoutSegmentNames();
-        for ($i = 0; $i < count($segNames); $i++) {
-            $this->renderer->attachLayout($segNames[$i], $i + 1);
+
+        foreach ($segNames as $i => $segName) {
+            $this->renderer->attachLayout($segName);
         }
+   
 
         echo "Window created (SFC Data-Driven Mode)\n";
         return true;

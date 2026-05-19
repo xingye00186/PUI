@@ -384,11 +384,14 @@ PHP;
 }
 
 // 生成分发函数 (AOT 兼容: if/else 显式调用, 不使用变量函数)
+// AOT 嵌套数组类型保留: 使用 isset() 替代 ?? 操作符,避免 C++ 编译时类型推断错误
 $dispatchCases = '';
 foreach ($allGroups as $gid) {
     $fnSuffix = groupIdToCamel($gid);
     $fnName = "getLayout_{$fnSuffix}";
-    $dispatchCases .= "    if (\$name === '{$gid}') return {$fnName}();\n";
+    $dispatchCases .= "    if (\$name === '{$gid}') {\n";
+    $dispatchCases .= "        return {$fnName}();\n";
+    $dispatchCases .= "    }\n";
 }
 $callLayoutSegment = <<<PHP
 
