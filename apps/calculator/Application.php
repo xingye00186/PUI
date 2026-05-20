@@ -119,7 +119,10 @@ class Application
         foreach ($buttons as $btn) {
             // AOT 安全检查
             if (!is_array($btn)) continue;
-            if (isset($btn['condition']) && !$this->component->evalCondition($btn['condition'])) continue;
+            // condition 字段也必须是数组（AOT 可能将其推断为 int）
+            $cond = $btn['condition'] ?? null;
+            if ($cond !== null && !is_array($cond)) continue;
+            if ($cond !== null && !$this->component->evalCondition($cond)) continue;
             $layer = $btn['layer'] ?? 0;
             if ($layer > $maxLayer) $maxLayer = $layer;
         }
@@ -132,8 +135,11 @@ class Application
                 if (!is_array($btn)) continue;
                 $btnLayer = $btn['layer'] ?? 0;
                 if ($btnLayer !== $l) continue;
-                if ($btnLayer < $maxLayer && isset($btn['condition'])) continue;
-                if (isset($btn['condition']) && !$this->component->evalCondition($btn['condition'])) continue;
+                // condition 字段也必须是数组（AOT 可能将其推断为 int）
+                $cond = $btn['condition'] ?? null;
+                if ($btnLayer < $maxLayer && $cond !== null) continue;
+                if ($cond !== null && !is_array($cond)) continue;
+                if ($cond !== null && !$this->component->evalCondition($cond)) continue;
 
                 // 安全访问坐标
                 $btnX = $btn['x'] ?? 0;

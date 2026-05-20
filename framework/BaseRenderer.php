@@ -152,14 +152,20 @@ class BaseRenderer
         foreach ($elements as $el) {
             // AOT 安全检查
             if (!is_array($el)) continue;
-            if (isset($el['condition']) && !$this->component->evalCondition($el['condition'])) continue;
+            // condition 字段也必须是数组（AOT 可能将其推断为 int）
+            $cond = $el['condition'] ?? null;
+            if ($cond !== null && !is_array($cond)) continue;
+            if ($cond !== null && !$this->component->evalCondition($cond)) continue;
             $layer = $el['layer'] ?? 0;
             if ($layer > $maxLayer) $maxLayer = $layer;
         }
         foreach ($buttons as $btn) {
             // AOT 安全检查
             if (!is_array($btn)) continue;
-            if (isset($btn['condition']) && !$this->component->evalCondition($btn['condition'])) continue;
+            // condition 字段也必须是数组（AOT 可能将其推断为 int）
+            $cond = $btn['condition'] ?? null;
+            if ($cond !== null && !is_array($cond)) continue;
+            if ($cond !== null && !$this->component->evalCondition($cond)) continue;
             $layer = $btn['layer'] ?? 0;
             if ($layer > $maxLayer) $maxLayer = $layer;
         }
@@ -171,7 +177,10 @@ class BaseRenderer
                 // AOT 安全检查: 确保 $el 是有效数组
                 if (!is_array($el)) continue;
                 if (($el['layer'] ?? 0) !== $l) continue;
-                if (isset($el['condition']) && !$this->component->evalCondition($el['condition'])) continue;
+                // condition 字段也必须是数组（AOT 可能将其推断为 int）
+                $cond = $el['condition'] ?? null;
+                if ($cond !== null && !is_array($cond)) continue;
+                if ($cond !== null && !$this->component->evalCondition($cond)) continue;
                 $type = $el['type'] ?? 'rect';
                 if ($type === 'rect') {
                     $this->ctx->fillRect(
@@ -192,8 +201,11 @@ class BaseRenderer
                 if (!is_array($btn)) continue;
                 $btnLayer = $btn['layer'] ?? 0;
                 if ($btnLayer !== $l) continue;
-                if ($btnLayer < $maxLayer && isset($btn['condition'])) continue;
-                if (isset($btn['condition']) && !$this->component->evalCondition($btn['condition'])) continue;
+                // condition 字段也必须是数组（AOT 可能将其推断为 int）
+                $cond = $btn['condition'] ?? null;
+                if ($btnLayer < $maxLayer && $cond !== null) continue;
+                if ($cond !== null && !is_array($cond)) continue;
+                if ($cond !== null && !$this->component->evalCondition($cond)) continue;
                 // 安全访问: 使用 ?? 提供默认值
                 $this->ctx->drawButton(
                     $hdc,
