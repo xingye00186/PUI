@@ -873,8 +873,10 @@ class BaseRenderer {
   <tr><th>模式</th><th>验证状态</th><th>证据</th></tr>
   <tr><td><code>abstract class</code> + <code>extends</code></td><td style="color:var(--color-success);font-weight:600;">&#10003; 已验证</td><td>ReactiveComponent 是 abstract class，App extends 已编译为 .exe</td></tr>
   <tr><td><code>interface</code> + <code>implements</code></td><td style="color:var(--color-success);font-weight:600;">&#10003; 已验证</td><td>最小测试通过 PHP&rarr;C++ 翻译阶段</td></tr>
+  <tr><td>类方法中遍历外部函数返回数组</td><td style="color:var(--color-success);font-weight:600;">&#10003; 已验证</td><td>BaseRenderer/Application 中使用 is_array() + ?? 默认值</td></tr>
 </table>
 <p>AOT 限制聚焦于动态语言特性 (<code>__get/__set</code>、<code>$obj-&gt;$var</code>)，而非 OOP 结构本身。</p>
+<p><strong>注意</strong>：AOT 编译器在类方法上下文中对外部函数返回的数组元素类型推断可能出错。必须使用 <code>is_array()</code> 检查 + <code>??</code> 默认值防护。</p>
 
 <h3>GDI 后端已知限制</h3>
 <table>
