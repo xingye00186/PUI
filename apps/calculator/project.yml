@@ -1,5 +1,5 @@
-# VueCalc Calculator Application Configuration (v6 M1)
-# 
+# VueCalc Calculator Application Configuration (v6 M2)
+#
 # 此文件支持独立 AOT 编译:
 #   cd <框架根>
 #   <swoole_compile*>/swoole_compiler.exe apps/calculator/project.yml -f
@@ -15,6 +15,8 @@ sources:
   - Application.php
   - ./gen
   # 框架运行时 (构建工具 compiler/ 不在此列)
+  - ../../framework/interfaces/ComponentInterface.php
+  - ../../framework/BaseComponent.php
   - ../../framework/ReactiveComponent.php
   - ../../framework/ChangeQueue.php
   - ../../framework/BaseRenderer.php
@@ -24,7 +26,7 @@ sources:
   - ../../stub
   - ../../cpp
 
-# v6 M1: Component registry — maps custom tags to .vue source files
+# v6 M2: Component registry — maps custom tags to .vue source files
 # (由 SFC 编译器读取，AOT 忽略)
 components:
   display-panel: ./components/DisplayPanel.vue

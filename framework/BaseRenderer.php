@@ -1,11 +1,12 @@
 <?php
 
+use native_types;
+
 /**
- * BaseRenderer - 泛化数据驱动渲染器 (v6 M1)
+ * BaseRenderer - 泛化数据驱动渲染器 (v6 M2)
  *
- * 支持分段布局: 通过 attachLayout/detachLayout 管理活跃布局列表。
- * 支持渲染抽象: 通过 RenderContext 进行后端无关绘制。
- * 保持两阶段分层渲染逻辑 (v5 M3 layer 机制)。
+ * 仅保留渲染调度逻辑，组件管理移至 Application。
+ * 支持两阶段分层渲染 (v5 M3 layer 机制)。
  *
  * AOT 限制:
  *   - foreach 遍历关联数组时 key 类型推断错误 → 使用 array_keys() + for 循环
@@ -16,47 +17,12 @@ class BaseRenderer
     private int $hWnd;
     private ReactiveComponent $component;
     private RenderContext $ctx;
-    private array $activeLayouts = [];
 
     public function __construct(int $hWnd, ReactiveComponent $component, RenderContext $ctx)
     {
         $this->hWnd = $hWnd;
         $this->component = $component;
         $this->ctx = $ctx;
-    }
-
-    /** v6 M1: 挂载组件布局到渲染列表 */
-    public function attachLayout(string $name): void
-    {
-      
-        $this->activeLayouts[$name] = 1;
-        $this->component->onAttach($name);
-    }
-
-    /** v6 M1: 从渲染列表卸载组件布局 */
-    public function detachLayout(string $name): void
-    {
-      
-        unset($this->activeLayouts[$name]);
-        $this->component->onDetach($name);
-    }
-
-    /**
-     * 获取所有活跃布局合并后的数据
-     * AOT 修复: array_keys() + for 循环, 避免 foreach 遍历关联数组时的类型推断问题
-     */
-    public function getActiveLayout(): array
-    {
-        $allElements = []; $allButtons = [];
-
-        foreach ($this->activeLayouts as $name => $tem_) {
-        
-            $seg = callLayoutSegment($name);
-            
-            foreach ((array)$seg['elements'] as $el) $allElements[] = $el;
-            foreach ((array)$seg['buttons'] as $btn) $allButtons[] = $btn;
-        }
-        return ['elements' => $allElements, 'buttons' => $allButtons];
     }
 
     /** 从组件属性获取绑定值 */
@@ -124,45 +90,44 @@ class BaseRenderer
     }
 
     /**
-     * 数据驱动渲染: 两阶段分层渲染 (v5 M3 + v6 M1 activeLayouts)
+     * 数据驱动渲染: 两阶段分层渲染 (v5 M3)
      *
+     * @param array $layout 预处理后的布局数据 ['elements' => [], 'buttons' => []]
      * AOT 修复: array_keys() + for 循环, 避免 foreach 遍历关联数组时的类型推断问题
      */
-    public function render(): void
+    public function render(array $layout): void
     {
         // v5 M4: 消费 dirty 状态
         $dirtyInfo = $this->component->consumeDirty();
 
         $hdc = $this->ctx->beginFrame($this->hWnd);
 
-        // v6 M1: 从 activeLayouts 动态收集布局数据
-        // AOT 修复: array_keys() + for 循环
-        $elements = []; $buttons = [];
-        $layoutNames = array_keys($this->activeLayouts);
-        $count = count($layoutNames);
-        for ($i = 0; $i < $count; $i++) {
-            $name = strval($layoutNames[$i]);
-            $seg = callLayoutSegment($name);
-            foreach ((array)$seg['elements'] as $el) $elements[] = $el;
-            foreach ((array)$seg['buttons'] as $btn) $buttons[] = $btn;
-        }
+        // 获取预处理后的布局数据
+        $elements = (array)($layout['elements'] ?? []);
+        $buttons = (array)($layout['buttons'] ?? []);
 
         // ====== Phase 1: 确定最高活跃层 ======
         $maxLayer = 0;
-        foreach ($elements as $el) {
-            // AOT 安全检查
+
+        // 遍历 elements (AOT 安全)
+        $elCount = count($elements);
+        for ($i = 0; $i < $elCount; $i++) {
+            $el = $elements[$i];
             if (!is_array($el)) continue;
-            // condition 字段也必须是数组（AOT 可能将其推断为 int）
+            // condition 字段必须是数组（AOT 可能将其推断为 int）
             $cond = $el['condition'] ?? null;
             if ($cond !== null && !is_array($cond)) continue;
             if ($cond !== null && !$this->component->evalCondition($cond)) continue;
             $layer = $el['layer'] ?? 0;
             if ($layer > $maxLayer) $maxLayer = $layer;
         }
-        foreach ($buttons as $btn) {
-            // AOT 安全检查
+
+        // 遍历 buttons (AOT 安全)
+        $btnCount = count($buttons);
+        for ($i = 0; $i < $btnCount; $i++) {
+            $btn = $buttons[$i];
             if (!is_array($btn)) continue;
-            // condition 字段也必须是数组（AOT 可能将其推断为 int）
+            // condition 字段必须是数组（AOT 可能将其推断为 int）
             $cond = $btn['condition'] ?? null;
             if ($cond !== null && !is_array($cond)) continue;
             if ($cond !== null && !$this->component->evalCondition($cond)) continue;
@@ -173,11 +138,11 @@ class BaseRenderer
         // ====== Phase 2: 分层渲染 ======
         for ($l = 0; $l <= $maxLayer; $l++) {
             // 本层元素
-            foreach ($elements as $el) {
-                // AOT 安全检查: 确保 $el 是有效数组
+            for ($i = 0; $i < $elCount; $i++) {
+                $el = $elements[$i];
                 if (!is_array($el)) continue;
                 if (($el['layer'] ?? 0) !== $l) continue;
-                // condition 字段也必须是数组（AOT 可能将其推断为 int）
+                // condition 字段必须是数组
                 $cond = $el['condition'] ?? null;
                 if ($cond !== null && !is_array($cond)) continue;
                 if ($cond !== null && !$this->component->evalCondition($cond)) continue;
@@ -196,12 +161,12 @@ class BaseRenderer
                 }
             }
             // 本层按钮
-            foreach ($buttons as $btn) {
-                // AOT 安全检查: 确保 $btn 是有效数组
+            for ($i = 0; $i < $btnCount; $i++) {
+                $btn = $buttons[$i];
                 if (!is_array($btn)) continue;
                 $btnLayer = $btn['layer'] ?? 0;
                 if ($btnLayer !== $l) continue;
-                // condition 字段也必须是数组（AOT 可能将其推断为 int）
+                // condition 字段必须是数组
                 $cond = $btn['condition'] ?? null;
                 if ($btnLayer < $maxLayer && $cond !== null) continue;
                 if ($cond !== null && !is_array($cond)) continue;
