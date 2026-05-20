@@ -117,6 +117,8 @@ class Application
         // Phase 1: 确定最高活跃层
         $maxLayer = 0;
         foreach ($buttons as $btn) {
+            // AOT 安全检查
+            if (!is_array($btn)) continue;
             if (isset($btn['condition']) && !$this->component->evalCondition($btn['condition'])) continue;
             $layer = $btn['layer'] ?? 0;
             if ($layer > $maxLayer) $maxLayer = $layer;
@@ -126,13 +128,21 @@ class Application
         for ($l = $maxLayer; $l >= 0; $l--) {
             for ($i = count($buttons) - 1; $i >= 0; $i--) {
                 $btn = $buttons[$i];
+                // AOT 安全检查
+                if (!is_array($btn)) continue;
                 $btnLayer = $btn['layer'] ?? 0;
                 if ($btnLayer !== $l) continue;
                 if ($btnLayer < $maxLayer && isset($btn['condition'])) continue;
                 if (isset($btn['condition']) && !$this->component->evalCondition($btn['condition'])) continue;
 
-                if ($x >= $btn['x'] && $x < $btn['x'] + $btn['w'] &&
-                    $y >= $btn['y'] && $y < $btn['y'] + $btn['h']) {
+                // 安全访问坐标
+                $btnX = $btn['x'] ?? 0;
+                $btnY = $btn['y'] ?? 0;
+                $btnW = $btn['w'] ?? 0;
+                $btnH = $btn['h'] ?? 0;
+
+                if ($x >= $btnX && $x < $btnX + $btnW &&
+                    $y >= $btnY && $y < $btnY + $btnH) {
                     $this->dispatchClick($btn);
                     return;
                 }

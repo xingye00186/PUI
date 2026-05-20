@@ -150,11 +150,15 @@ class BaseRenderer
         // ====== Phase 1: 确定最高活跃层 ======
         $maxLayer = 0;
         foreach ($elements as $el) {
+            // AOT 安全检查
+            if (!is_array($el)) continue;
             if (isset($el['condition']) && !$this->component->evalCondition($el['condition'])) continue;
             $layer = $el['layer'] ?? 0;
             if ($layer > $maxLayer) $maxLayer = $layer;
         }
         foreach ($buttons as $btn) {
+            // AOT 安全检查
+            if (!is_array($btn)) continue;
             if (isset($btn['condition']) && !$this->component->evalCondition($btn['condition'])) continue;
             $layer = $btn['layer'] ?? 0;
             if ($layer > $maxLayer) $maxLayer = $layer;
@@ -164,30 +168,50 @@ class BaseRenderer
         for ($l = 0; $l <= $maxLayer; $l++) {
             // 本层元素
             foreach ($elements as $el) {
+                // AOT 安全检查: 确保 $el 是有效数组
+                if (!is_array($el)) continue;
                 if (($el['layer'] ?? 0) !== $l) continue;
                 if (isset($el['condition']) && !$this->component->evalCondition($el['condition'])) continue;
-                $type = $el['type'];
+                $type = $el['type'] ?? 'rect';
                 if ($type === 'rect') {
-                    $this->ctx->fillRect($hdc, $el['x'], $el['y'], $el['w'], $el['h'], $el['color']);
+                    $this->ctx->fillRect(
+                        $hdc,
+                        $el['x'] ?? 0,
+                        $el['y'] ?? 0,
+                        $el['w'] ?? 0,
+                        $el['h'] ?? 0,
+                        $el['color'] ?? 0
+                    );
                 } elseif ($type === 'text') {
                     $this->renderTextElement($hdc, $el);
                 }
             }
             // 本层按钮
             foreach ($buttons as $btn) {
+                // AOT 安全检查: 确保 $btn 是有效数组
+                if (!is_array($btn)) continue;
                 $btnLayer = $btn['layer'] ?? 0;
                 if ($btnLayer !== $l) continue;
                 if ($btnLayer < $maxLayer && isset($btn['condition'])) continue;
                 if (isset($btn['condition']) && !$this->component->evalCondition($btn['condition'])) continue;
-                $this->ctx->drawButton($hdc, $btn['x'], $btn['y'], $btn['w'], $btn['h'], $btn['bg'], $btn['border']);
+                // 安全访问: 使用 ?? 提供默认值
+                $this->ctx->drawButton(
+                    $hdc,
+                    $btn['x'] ?? 0,
+                    $btn['y'] ?? 0,
+                    $btn['w'] ?? 0,
+                    $btn['h'] ?? 0,
+                    $btn['bg'] ?? 0,
+                    $btn['border'] ?? 0
+                );
                 // 按钮文字居中
-                $label = $btn['label'];
+                $label = $btn['label'] ?? '';
                 $labelLen = strlen($label);
                 $labelFontSize = 22;
                 $labelCharW = (int)($labelFontSize * 0.6);
-                $labelX = $btn['x'] + (int)(($btn['w'] - $labelLen * $labelCharW) / 2);
-                $labelY = $btn['y'] + (int)(($btn['h'] - $labelFontSize) / 2);
-                $this->ctx->drawText($hdc, $labelX, $labelY, $label, $labelFontSize, $btn['fg'], 1);
+                $labelX = ($btn['x'] ?? 0) + (int)((($btn['w'] ?? 0) - $labelLen * $labelCharW) / 2);
+                $labelY = ($btn['y'] ?? 0) + (int)((($btn['h'] ?? 0) - $labelFontSize) / 2);
+                $this->ctx->drawText($hdc, $labelX, $labelY, $label, $labelFontSize, $btn['fg'] ?? 0xFFFFFF, 1);
             }
         }
 
