@@ -2,453 +2,607 @@
 
 <cite>
 **本文档引用的文件**
-- [ReactiveComponent.php](file://src/ReactiveComponent.php)
-- [Calculator.gen.php](file://src/Calculator.gen.php)
-- [Calculator.vue](file://src/Calculator.vue)
-- [CalculatorLayout_gen.php](file://src/CalculatorLayout_gen.php)
-- [ChangeQueue.php](file://src/ChangeQueue.php)
-- [main.php](file://main.php)
-- [CalcRenderer.php](file://src/CalcRenderer.php)
-- [CalcApp.php](file://src/CalcApp.php)
-- [vue_calc.cc](file://cpp-src/vue_calc.cc)
-- [vue_calc.stub.php](file://php-src/vue_calc.stub.php)
-- [sfc-compiler.php](file://tools/sfc-compiler.php)
-- [sfc-compiler-test.php](file://tests/sfc-compiler-test.php)
-- [project.yml](file://project.yml)
+- [framework/BaseComponent.php](file://framework/BaseComponent.php)
+- [framework/ReactiveComponent.php](file://framework/ReactiveComponent.php)
+- [framework/interfaces/ComponentInterface.php](file://framework/interfaces/ComponentInterface.php)
+- [framework/BaseRenderer.php](file://framework/BaseRenderer.php)
+- [framework/ChangeQueue.php](file://framework/ChangeQueue.php)
+- [framework/rendering/RenderContext.php](file://framework/rendering/RenderContext.php)
+- [framework/rendering/GdiRenderContext.php](file://framework/rendering/GdiRenderContext.php)
+- [apps/calculator/App.vue](file://apps/calculator/App.vue)
+- [apps/calculator/components/DisplayPanel.vue](file://apps/calculator/components/DisplayPanel.vue)
+- [apps/calculator/components/NumPad.vue](file://apps/calculator/components/NumPad.vue)
+- [apps/calculator/components/AboutDialog.vue](file://apps/calculator/components/AboutDialog.vue)
+- [apps/calculator/Application.php](file://apps/calculator/Application.php)
+- [framework/sfc-compiler.php](file://framework/sfc-compiler.php)
+- [cpp/vue_calc.cc](file://cpp/vue_calc.cc)
+- [stub/vue_calc.stub.php](file://stub/vue_calc.stub.php)
 </cite>
 
 ## 目录
 1. [简介](#简介)
 2. [项目结构](#项目结构)
 3. [核心组件](#核心组件)
-4. [架构概览](#架构概览)
+4. [架构总览](#架构总览)
 5. [详细组件分析](#详细组件分析)
-6. [依赖关系分析](#依赖关系分析)
+6. [依赖分析](#依赖分析)
 7. [性能考虑](#性能考虑)
 8. [故障排除指南](#故障排除指南)
-9. [版本兼容性与迁移](#版本兼容性与迁移)
-10. [结论](#结论)
+9. [结论](#结论)
+10. [附录](#附录)
 
 ## 简介
-
-VueCalc是一个基于Vue设计理念的桌面计算器应用程序，采用单文件组件(SFC)模式构建。该项目展示了如何使用PHP实现响应式数据驱动的桌面应用，并通过C++ Win32 API进行底层渲染。
-
-该系统的核心特点：
-- **响应式组件架构**：基于ReactiveComponent基类的组件化设计
-- **SFC编译器**：将.vue单文件组件转换为PHP类和布局数据
-- **数据驱动渲染**：组件状态变化自动触发渲染更新
-- **跨语言集成**：PHP业务逻辑 + C++ GDI绘制引擎
+本文件为VueCalc框架的完整API参考文档，面向开发者提供组件接口、基类方法与属性的权威规范，涵盖Calculator应用示例中的组件与渲染管线。文档包含：
+- 接口与类的定义、参数与返回值说明
+- 方法功能、调用时机与注意事项
+- 组件继承关系与类层次结构
+- 配置项与默认行为
+- 最佳实践与常见陷阱
+- 与C++层Win32 API的互操作说明
 
 ## 项目结构
-
-```mermaid
-graph TB
-subgraph "源代码结构"
-A[src/] --> A1[ReactiveComponent.php]
-A --> A2[Calculator.gen.php]
-A --> A3[Calculator.vue]
-A --> A4[CalculatorLayout_gen.php]
-A --> A5[ChangeQueue.php]
-A --> A6[CalcRenderer.php]
-A --> A7[CalcApp.php]
-B[cpp-src/] --> B1[vue_calc.cc]
-C[php-src/] --> C1[vue_calc.stub.php]
-D[tools/] --> D1[sfc-compiler.php]
-D --> D2[compiler/]
-E[tests/] --> E1[sfc-compiler-test.php]
-F[main.php] --> G[入口程序]
-end
-```
-
-**图表来源**
-- [project.yml:1-10](file://project.yml#L1-L10)
-- [main.php:1-291](file://main.php#L1-L291)
-
-**章节来源**
-- [project.yml:1-10](file://project.yml#L1-L10)
-- [main.php:1-291](file://main.php#L1-L291)
-
-## 核心组件
-
-### ReactiveComponent基类
-
-ReactiveComponent是所有响应式组件的基类，提供了组件生命周期管理和变更通知机制。
-
-**主要属性：**
-- `$dirty: bool` - 脏标记，指示组件状态是否需要重新渲染
-- `$template: string` - 模板文件路径（可选）
-- `$queue: ?ChangeQueue` - 全局变更队列实例
-- `$componentId: string` - 组件唯一标识符
-
-**核心方法：**
-- `__construct(?string $componentId = null)` - 构造函数，设置组件ID
-- `initShared(int $tableSize = 10240): void` - 初始化共享资源和变更队列
-
-**章节来源**
-- [ReactiveComponent.php:11-35](file://src/ReactiveComponent.php#L11-L35)
-
-### Calculator组件
-
-Calculator是继承自ReactiveComponent的具体组件，实现了完整的计算器功能。
-
-**状态属性：**
-- `$display: string` - 当前显示值，默认'0'
-- `$expression: string` - 表达式显示，默认''
-- `$operand1: string` - 第一个操作数，默认''
-- `$operator: string` - 当前运算符，默认''
-- `$newInput: bool` - 是否开始新输入，默认true
-- `$hasDecimal: bool` - 是否已输入小数点，默认false
-
-**核心方法：**
-- `reset(): void` - 重置计算器状态
-- `inputDigit(string $digit): void` - 输入数字
-- `inputDecimal(): void` - 输入小数点
-- `inputOperator(string $op): void` - 输入运算符
-- `calculate(): void` - 执行计算
-- `backspace(): void` - 退格删除
-- `handleButton(string $label): void` - 处理按钮点击
-
-**章节来源**
-- [Calculator.gen.php:9-174](file://src/Calculator.gen.php#L9-L174)
-- [Calculator.vue:45-202](file://src/Calculator.vue#L45-L202)
-
-### CalcRenderer渲染器
-
-CalcRenderer负责将组件状态数据驱动地渲染到屏幕上。
-
-**核心职责：**
-- 读取布局数据并渲染背景元素(rect)
-- 渲染文本显示区域
-- 绘制按钮及其标签
-- 调用C++ GDI API进行实际绘制
-
-**关键方法：**
-- `__construct(int $hWnd, Calculator $component)` - 构造函数
-- `render(): void` - 主渲染方法
-- `renderTextElement(int $hdc, array $el): void` - 渲染文本元素
-- `getBindValue(string $bindKey): string` - 获取绑定值
-
-**章节来源**
-- [main.php:26-133](file://main.php#L26-L133)
-
-### CalcApp应用控制器
-
-CalcApp是应用程序的主控制器，管理窗口生命周期和事件循环。
-
-**核心职责：**
-- 创建和管理主窗口
-- 处理用户输入事件
-- 协调组件状态更新和渲染
-- 控制应用运行循环
-
-**关键方法：**
-- `__construct(Calculator $calc)` - 构造函数
-- `initWindow(): bool` - 初始化窗口
-- `run(): void` - 主事件循环
-- `handleClick(int $x, int $y): void` - 处理鼠标点击
-- `dispatchClick(array $btn): void` - 分发按钮点击事件
-
-**章节来源**
-- [main.php:139-259](file://main.php#L139-L259)
-
-## 架构概览
+VueCalc采用“SFC编译器 + 组件基类 + 渲染器 + 应用控制器”的分层架构。核心目录与职责如下：
+- framework：框架核心（组件基类、渲染上下文、渲染器、变更队列）
+- apps/calculator：示例应用（主组件与子组件、应用控制器）
+- cpp：Win32 API封装（GDI绘制原语）
+- stub：C++函数的PHP层声明
+- docs：技术文档与规划
 
 ```mermaid
 graph TB
 subgraph "应用层"
-A[CalcApp] --> B[CalcRenderer]
-B --> C[Calculator]
+APP["Application<br/>应用控制器"]
+ROOT["ReactiveComponent<br/>主组件基类"]
+DISPLAY["DisplayPanel.vue<br/>子组件"]
+NUMPAD["NumPad.vue<br/>子组件"]
+ABOUT["AboutDialog.vue<br/>子组件"]
 end
-subgraph "编译器层"
-D[SFC Compiler] --> E[Calculator.gen.php]
-D --> F[CalculatorLayout_gen.php]
+subgraph "框架层"
+COMP_IF["ComponentInterface<br/>组件接口"]
+BASE_COMP["BaseComponent<br/>组件基类"]
+RENDERER["BaseRenderer<br/>渲染器"]
+RC["RenderContext<br/>渲染上下文抽象"]
+GDI["GdiRenderContext<br/>GDI实现"]
+QUEUE["ChangeQueue<br/>变更队列"]
 end
-subgraph "渲染层"
-G[C++ GDI API] --> H[Win32 Window]
-H --> I[屏幕输出]
+subgraph "C++层"
+WIN32["Win32 API<br/>窗口与消息"]
+PRIMS["GDI原语<br/>绘制"]
 end
-subgraph "数据流"
-J[用户输入] --> K[CalcApp.handleClick]
-K --> L[Calculator.handleButton]
-L --> M[组件状态变更]
-M --> N[dirty标记]
-N --> O[CalcRenderer.render]
-O --> P[GDI绘制]
-end
-C --> Q[布局数据]
-E --> Q
-F --> Q
-Q --> O
-O --> G
+APP --> RENDERER
+APP --> ROOT
+ROOT --> COMP_IF
+BASE_COMP --> COMP_IF
+RENDERER --> RC
+RC --> GDI
+GDI --> PRIMS
+PRIMS --> WIN32
+ROOT --> DISPLAY
+ROOT --> NUMPAD
+ROOT --> ABOUT
 ```
 
-**图表来源**
-- [main.php:139-259](file://main.php#L139-L259)
-- [sfc-compiler.php:1-210](file://tools/sfc-compiler.php#L1-L210)
+图表来源
+- [apps/calculator/Application.php:15-36](file://apps/calculator/Application.php#L15-L36)
+- [framework/BaseComponent.php:16-36](file://framework/BaseComponent.php#L16-L36)
+- [framework/ReactiveComponent.php:14-35](file://framework/ReactiveComponent.php#L14-L35)
+- [framework/BaseRenderer.php:15-26](file://framework/BaseRenderer.php#L15-L26)
+- [framework/rendering/RenderContext.php:13-29](file://framework/rendering/RenderContext.php#L13-L29)
+- [framework/rendering/GdiRenderContext.php:11-37](file://framework/rendering/GdiRenderContext.php#L11-L37)
+- [cpp/vue_calc.cc:36-84](file://cpp/vue_calc.cc#L36-L84)
 
-**章节来源**
-- [main.php:1-291](file://main.php#L1-L291)
-- [sfc-compiler.php:1-210](file://tools/sfc-compiler.php#L1-L210)
+章节来源
+- [apps/calculator/Application.php:15-36](file://apps/calculator/Application.php#L15-L36)
+- [framework/BaseComponent.php:16-36](file://framework/BaseComponent.php#L16-L36)
+- [framework/ReactiveComponent.php:14-35](file://framework/ReactiveComponent.php#L14-L35)
+- [framework/BaseRenderer.php:15-26](file://framework/BaseRenderer.php#L15-L26)
+- [framework/rendering/RenderContext.php:13-29](file://framework/rendering/RenderContext.php#L13-L29)
+- [framework/rendering/GdiRenderContext.php:11-37](file://framework/rendering/GdiRenderContext.php#L11-L37)
+- [cpp/vue_calc.cc:36-84](file://cpp/vue_calc.cc#L36-L84)
+
+## 核心组件
+本节梳理框架中的核心接口与类，明确其职责、方法签名与使用要点。
+
+- ComponentInterface（组件接口）
+  - 职责：定义组件树结构、生命周期与布局数据获取的统一契约
+  - 关键方法
+    - getId(): string
+    - getLayout(): array
+    - getChildren(): array
+    - getParent(): ?ComponentInterface
+    - getProps(): array
+    - onAttach(): void
+    - onDetach(): void
+  - 注意事项
+    - AOT兼容：显式返回类型，避免类型推断问题
+    - 组件树管理：父/子引用与属性映射由具体实现负责
+
+- BaseComponent（组件基类）
+  - 职责：提供组件树基础能力（父子引用、子组件管理、属性配置、挂载状态）
+  - 关键方法
+    - getId(): string
+    - getParent(): ?ComponentInterface
+    - getChildren(): array
+    - getProps(): array
+    - setParent(ComponentInterface): void
+    - setProps(array): void
+    - addChild(ComponentInterface, array): void
+    - removeChild(string): void
+    - isAttached(): bool
+    - markAttached(): void
+    - markDetached(): void
+    - getAllDescendants(): array
+    - getBaseComponents(): array
+  - 抽象方法（子类实现）
+    - getLayout(): array
+    - onAttach(): void
+    - onDetach(): void
+  - AOT兼容要点
+    - 遍历关联数组使用array_keys()+for循环
+    - 使用(strval)与(array)保证类型安全
+
+- ReactiveComponent（响应式组件基类）
+  - 职责：在BaseComponent基础上提供响应式状态管理（脏标记、组级脏标记、全量脏标记）
+  - 关键属性
+    - dirty: bool（是否需要重绘）
+    - template: string（模板文件路径，可选）
+    - dirtyGroups: array（组级脏标记集合）
+    - fullDirty: bool（是否需要全量重绘）
+  - 关键方法
+    - initShared(int): void（初始化共享资源，如变更队列）
+    - markGroupDirty(string): void
+    - markFullDirty(): void
+    - consumeDirty(): array（消费脏状态，返回full与groups）
+    - getBindValue(string): string（绑定值获取）
+    - dispatchClick(array): void（按钮点击处理）
+    - evalCondition(array): bool（条件求值）
+  - AOT兼容要点
+    - 去除魔术方法，改为直接属性+手动脏标记
+
+- BaseRenderer（渲染器）
+  - 职责：两阶段分层渲染（确定最高活跃层 -> 分层绘制），调用渲染上下文执行绘制
+  - 关键方法
+    - render(array): void（接收预处理布局数据）
+  - 渲染流程
+    - 阶段1：扫描elements/buttons，确定最大层
+    - 阶段2：按层从0到max逐层绘制，按钮在最高层优先
+  - AOT兼容要点
+    - 遍历使用array_keys()+for循环
+    - 对嵌套数组进行(array)类型转换
+
+- RenderContext（渲染上下文抽象）
+  - 职责：后端无关的绘制接口抽象
+  - 关键方法
+    - beginFrame(int): int
+    - endFrame(int, int): void
+    - fillRect(int, int, int, int, int): void
+    - drawText(int, int, int, string, int, int, int): void
+    - drawButton(int, int, int, int, int, int): void
+
+- GdiRenderContext（GDI实现）
+  - 职责：Win32 GDI后端实现，委托C++层stub函数
+  - 关键方法
+    - beginFrame(int): int
+    - endFrame(int, int): void
+    - fillRect(int, int, int, int, int): void
+    - drawText(int, int, int, string, int, int, int): void
+    - drawButton(int, int, int, int, int, int): void
+
+- ChangeQueue（变更队列）
+  - 职责：环形缓冲实现的变更通知队列
+  - 关键方法
+    - push(string, int, $value): void
+    - pop(): ?array
+    - isEmpty(): bool
+
+章节来源
+- [framework/interfaces/ComponentInterface.php:13-52](file://framework/interfaces/ComponentInterface.php#L13-L52)
+- [framework/BaseComponent.php:16-177](file://framework/BaseComponent.php#L16-L177)
+- [framework/ReactiveComponent.php:14-90](file://framework/ReactiveComponent.php#L14-L90)
+- [framework/BaseRenderer.php:15-197](file://framework/BaseRenderer.php#L15-L197)
+- [framework/rendering/RenderContext.php:13-29](file://framework/rendering/RenderContext.php#L13-L29)
+- [framework/rendering/GdiRenderContext.php:11-37](file://framework/rendering/GdiRenderContext.php#L11-L37)
+- [framework/ChangeQueue.php:11-57](file://framework/ChangeQueue.php#L11-L57)
+
+## 架构总览
+下图展示从应用启动到渲染与事件处理的完整流程，以及各组件间的交互关系。
+
+```mermaid
+sequenceDiagram
+participant App as "Application"
+participant Root as "ReactiveComponent(根)"
+participant Renderer as "BaseRenderer"
+participant Ctx as "RenderContext/GdiRenderContext"
+participant Win as "Win32 API"
+App->>App : initWindow()
+App->>Root : attachComponents(getBaseComponents())
+App->>Renderer : new BaseRenderer(hWnd, root, ctx)
+App->>App : run()
+loop 事件循环
+App->>Win : peekMessage()
+alt 鼠标点击
+App->>App : handleClick(x,y)
+App->>Root : dispatchClick(btn)
+Root-->>Root : 修改状态并设置 dirty
+end
+alt 组件脏标记
+App->>Renderer : render(getActiveLayout())
+Renderer->>Ctx : beginFrame()
+Renderer->>Ctx : fillRect()/drawText()/drawButton()
+Renderer->>Ctx : endFrame()
+end
+end
+```
+
+图表来源
+- [apps/calculator/Application.php:51-76](file://apps/calculator/Application.php#L51-L76)
+- [apps/calculator/Application.php:205-263](file://apps/calculator/Application.php#L205-L263)
+- [framework/BaseRenderer.php:98-196](file://framework/BaseRenderer.php#L98-L196)
+- [framework/rendering/GdiRenderContext.php:13-36](file://framework/rendering/GdiRenderContext.php#L13-L36)
+- [cpp/vue_calc.cc:70-84](file://cpp/vue_calc.cc#L70-L84)
 
 ## 详细组件分析
 
-### ReactiveComponent类分析
-
+### 组件接口与类层次结构
 ```mermaid
 classDiagram
+class ComponentInterface {
++getId() string
++getLayout() array
++getChildren() array
++getParent() ComponentInterface?
++getProps() array
++onAttach() void
++onDetach() void
+}
+class BaseComponent {
+-string id
+-ComponentInterface? parent
+-array children
+-array props
+-bool attached
++getId() string
++getParent() ComponentInterface?
++getChildren() array
++getProps() array
++setParent(parent) void
++setProps(props) void
++addChild(child, props) void
++removeChild(childId) void
++isAttached() bool
++markAttached() void
++markDetached() void
++getAllDescendants() array
++getBaseComponents() array
+<<abstract>>
+}
 class ReactiveComponent {
+-ChangeQueue? queue
 +bool dirty
 +string template
-+ChangeQueue queue
-+string componentId
-+__construct(componentId)
-+initShared(tableSize)
+-array dirtyGroups
+-bool fullDirty
++initShared(tableSize) void
++markGroupDirty(groupId) void
++markFullDirty() void
++consumeDirty() array
++getBindValue(bindKey) string
++dispatchClick(btn) void
++evalCondition(cond) bool
+<<abstract>>
 }
-class Calculator {
-+string display
-+string expression
-+string operand1
-+string operator
-+bool newInput
-+bool hasDecimal
-+reset()
-+inputDigit(digit)
-+inputDecimal()
-+inputOperator(op)
-+calculate()
-+backspace()
-+handleButton(label)
+class BaseRenderer {
+-int hWnd
+-ReactiveComponent component
+-RenderContext ctx
++render(layout) void
+<<private>> getBindValue(bindKey) string
+<<private>> renderTextElement(hdc, el) void
+}
+class RenderContext {
++beginFrame(hWnd) int
++endFrame(hWnd, hdc) void
++fillRect(hdc, x, y, w, h, color) void
++drawText(hdc, x, y, text, fontSize, color, bold) void
++drawButton(hdc, x, y, w, h, bg, border) void
+<<abstract>>
+}
+class GdiRenderContext {
++beginFrame(hWnd) int
++endFrame(hWnd, hdc) void
++fillRect(hdc, x, y, w, h, color) void
++drawText(hdc, x, y, text, fontSize, color, bold) void
++drawButton(hdc, x, y, w, h, bg, border) void
 }
 class ChangeQueue {
 -array buffer
 -int head
 -int tail
 -int maxSize
-+push(key, version, value)
-+pop()
-+isEmpty()
++push(key, version, value) void
++pop() array?
++isEmpty() bool
 }
-Calculator --|> ReactiveComponent : 继承
-ReactiveComponent --> ChangeQueue : 使用
+ComponentInterface <|.. BaseComponent
+BaseComponent <|-- ReactiveComponent
+BaseRenderer --> RenderContext : "依赖"
+GdiRenderContext --|> RenderContext
+ReactiveComponent --> ChangeQueue : "使用"
 ```
 
-**图表来源**
-- [ReactiveComponent.php:11-35](file://src/ReactiveComponent.php#L11-L35)
-- [Calculator.gen.php:9-174](file://src/Calculator.gen.php#L9-L174)
-- [ChangeQueue.php:11-57](file://src/ChangeQueue.php#L11-L57)
+图表来源
+- [framework/interfaces/ComponentInterface.php:13-52](file://framework/interfaces/ComponentInterface.php#L13-L52)
+- [framework/BaseComponent.php:16-177](file://framework/BaseComponent.php#L16-L177)
+- [framework/ReactiveComponent.php:14-90](file://framework/ReactiveComponent.php#L14-L90)
+- [framework/BaseRenderer.php:15-197](file://framework/BaseRenderer.php#L15-L197)
+- [framework/rendering/RenderContext.php:13-29](file://framework/rendering/RenderContext.php#L13-L29)
+- [framework/rendering/GdiRenderContext.php:11-37](file://framework/rendering/GdiRenderContext.php#L11-L37)
+- [framework/ChangeQueue.php:11-57](file://framework/ChangeQueue.php#L11-L57)
 
-**章节来源**
-- [ReactiveComponent.php:11-35](file://src/ReactiveComponent.php#L11-L35)
-- [ChangeQueue.php:11-57](file://src/ChangeQueue.php#L11-L57)
+章节来源
+- [framework/interfaces/ComponentInterface.php:13-52](file://framework/interfaces/ComponentInterface.php#L13-L52)
+- [framework/BaseComponent.php:16-177](file://framework/BaseComponent.php#L16-L177)
+- [framework/ReactiveComponent.php:14-90](file://framework/ReactiveComponent.php#L14-L90)
+- [framework/BaseRenderer.php:15-197](file://framework/BaseRenderer.php#L15-L197)
+- [framework/rendering/RenderContext.php:13-29](file://framework/rendering/RenderContext.php#L13-L29)
+- [framework/rendering/GdiRenderContext.php:11-37](file://framework/rendering/GdiRenderContext.php#L11-L37)
+- [framework/ChangeQueue.php:11-57](file://framework/ChangeQueue.php#L11-L57)
 
-### CalcApp事件处理流程
+### 应用控制器 Application API
+- 职责
+  - 窗口初始化与显示
+  - 组件树挂载与卸载
+  - 事件循环与点击分发
+  - 布局收集与渲染调度
+- 关键方法
+  - registerRootComponent(ReactiveComponent): void
+  - initWindow(): bool
+  - getActiveComponents(): array
+  - getActiveLayout(): array
+  - run(): void
+  - detachComponent(string): void
+- 事件处理
+  - handleClick(int, int): void（分层命中测试，逆序从最高层测试）
+  - dispatchClick(array): void（转发到根组件）
 
-```mermaid
-sequenceDiagram
-participant User as 用户
-participant App as CalcApp
-participant Renderer as CalcRenderer
-participant Component as Calculator
-participant GDI as C++ GDI
-User->>App : 鼠标点击
-App->>App : handleClick(x, y)
-App->>App : 查找命中按钮
-App->>Component : dispatchClick(btn)
-alt 数字/运算符按钮
-Component->>Component : inputDigit()/inputOperator()
-else 重置按钮
-Component->>Component : reset()
-else 退格按钮
-Component->>Component : backspace()
-else 等号按钮
-Component->>Component : calculate()
-end
-Component->>Component : 设置dirty=true
-App->>Renderer : render()
-Renderer->>GDI : 绘制背景元素
-Renderer->>GDI : 绘制按钮
-Renderer->>GDI : 绘制文本
-GDI-->>User : 更新显示
-Note over Component,Renderer : 状态变更触发重绘
-```
+章节来源
+- [apps/calculator/Application.php:15-322](file://apps/calculator/Application.php#L15-L322)
 
-**图表来源**
-- [main.php:171-259](file://main.php#L171-L259)
-- [Calculator.gen.php:149-168](file://src/Calculator.gen.php#L149-L168)
+### 渲染器 BaseRenderer API
+- render(array layout): void
+  - 参数
+    - layout: 预处理后的布局数据，包含elements与buttons数组
+  - 流程
+    - 消费脏状态（consumeDirty）
+    - beginFrame -> 绘制 -> endFrame
+    - 两阶段分层渲染：先确定最大层，再按层绘制
+  - 注意
+    - AOT安全：使用array_keys()+for循环遍历
+    - 条件字段必须为数组，否则跳过
 
-**章节来源**
-- [main.php:171-259](file://main.php#L171-L259)
-- [Calculator.gen.php:149-168](file://src/Calculator.gen.php#L149-L168)
+章节来源
+- [framework/BaseRenderer.php:98-196](file://framework/BaseRenderer.php#L98-L196)
 
-### 计算器核心算法流程
+### 渲染上下文 RenderContext 与 GdiRenderContext
+- RenderContext
+  - beginFrame(int): int
+  - endFrame(int, int): void
+  - fillRect(int, int, int, int, int): void
+  - drawText(int, int, int, string, int, int, int): void
+  - drawButton(int, int, int, int, int, int): void
+- GdiRenderContext
+  - 委托C++层stub函数实现具体绘制
 
-```mermaid
-flowchart TD
-Start([开始计算]) --> CheckOp{"是否有运算符?"}
-CheckOp --> |否| Return["直接返回"]
-CheckOp --> |是| CheckOperand{"是否有第一个操作数?"}
-CheckOperand --> |否| Return
-CheckOperand --> |是| ParseNumbers["解析操作数为浮点数"]
-ParseNumbers --> CheckOperator{"检查运算符"}
-CheckOperator --> |+| Add["执行加法"]
-CheckOperator --> |-| Sub["执行减法"]
-CheckOperator --> |*| Mul["执行乘法"]
-CheckOperator --> |/| Div["执行除法"]
-Div --> CheckDivZero{"除数是否为0?"}
-CheckDivZero --> |是| Error["设置错误状态<br/>清空所有状态"]
-CheckDivZero --> |否| CalcResult["计算结果"]
-CalcResult --> FormatResult["格式化结果显示"]
-Add --> FormatResult
-Sub --> FormatResult
-Mul --> FormatResult
-Div --> CalcResult
-FormatResult --> CheckInteger{"是否为整数?"}
-CheckInteger --> |是| SetInteger["设置为整数字符串"]
-CheckInteger --> |否| SetFloat["设置为格式化浮点数"]
-SetInteger --> ClearState["清空表达式状态"]
-SetFloat --> ClearState
-Error --> End([结束])
-ClearState --> End
-Return --> End
-```
+章节来源
+- [framework/rendering/RenderContext.php:13-29](file://framework/rendering/RenderContext.php#L13-L29)
+- [framework/rendering/GdiRenderContext.php:11-37](file://framework/rendering/GdiRenderContext.php#L11-L37)
+- [stub/vue_calc.stub.php:12-24](file://stub/vue_calc.stub.php#L12-L24)
+- [cpp/vue_calc.cc:90-157](file://cpp/vue_calc.cc#L90-L157)
 
-**图表来源**
-- [Calculator.gen.php:85-128](file://src/Calculator.gen.php#L85-L128)
+### 响应式组件 ReactiveComponent API
+- 属性
+  - dirty: bool（脏标记）
+  - template: string（模板路径，可选）
+  - dirtyGroups: array（组级脏标记）
+  - fullDirty: bool（全量脏标记）
+- 方法
+  - initShared(int): void
+  - markGroupDirty(string): void
+  - markFullDirty(): void
+  - consumeDirty(): array
+  - getBindValue(string): string
+  - dispatchClick(array): void
+  - evalCondition(array): bool
 
-**章节来源**
-- [Calculator.gen.php:85-128](file://src/Calculator.gen.php#L85-L128)
+章节来源
+- [framework/ReactiveComponent.php:14-90](file://framework/ReactiveComponent.php#L14-L90)
 
-## 依赖关系分析
+### 组件基类 BaseComponent API
+- 属性
+  - id: string
+  - parent: ?ComponentInterface
+  - children: array
+  - props: array
+  - attached: bool
+- 方法
+  - getId(): string
+  - getParent(): ?ComponentInterface
+  - getChildren(): array
+  - getProps(): array
+  - setParent(ComponentInterface): void
+  - setProps(array): void
+  - addChild(ComponentInterface, array): void
+  - removeChild(string): void
+  - isAttached(): bool
+  - markAttached(): void
+  - markDetached(): void
+  - getAllDescendants(): array
+  - getBaseComponents(): array
+  - getLayout(): array（抽象）
+  - onAttach(): void（抽象）
+  - onDetach(): void（抽象）
+
+章节来源
+- [framework/BaseComponent.php:16-177](file://framework/BaseComponent.php#L16-L177)
+
+### 计算器应用组件与交互
+- 主组件 App.vue
+  - 属性
+    - display: string（显示值）
+    - expression: string（表达式）
+    - operand1: string（第一个操作数）
+    - operator: string（当前运算符）
+    - newInput: bool（是否开始新输入）
+    - hasDecimal: bool（是否已输入小数点）
+    - showDialog: bool（对话框状态）
+    - dialogTitle/dialogContent/dialogVersion/closeHint: string（对话框文本）
+  - 方法
+    - reset(): void
+    - inputDigit(string): void
+    - inputDecimal(): void
+    - inputOperator(string): void
+    - calculate(): void
+    - backspace(): void
+    - handleButton(string): void
+    - toggleAboutDialog(): void
+- 子组件
+  - DisplayPanel.vue：显示面板
+  - NumPad.vue：数字键盘
+  - AboutDialog.vue：关于对话框
+
+章节来源
+- [apps/calculator/App.vue:25-194](file://apps/calculator/App.vue#L25-L194)
+- [apps/calculator/components/DisplayPanel.vue:1-12](file://apps/calculator/components/DisplayPanel.vue#L1-L12)
+- [apps/calculator/components/NumPad.vue:1-37](file://apps/calculator/components/NumPad.vue#L1-L37)
+- [apps/calculator/components/AboutDialog.vue:1-37](file://apps/calculator/components/AboutDialog.vue#L1-L37)
+
+### SFC编译器与生成物
+- 功能
+  - 从.vue文件提取template/script/style块
+  - 解析组件引用、样式映射、模板AST
+  - 生成组件类（*.php），包含getLayout()/dispatchClick()/evalCondition()等
+  - 生成根组件registerChildren()/getBaseComponents()
+- 输出
+  - *Component.php（组件类）
+  - AOT校验通过后写入文件
+
+章节来源
+- [framework/sfc-compiler.php:1-819](file://framework/sfc-compiler.php#L1-L819)
+
+### C++层Win32 API与互操作
+- 函数族（PHP层以vue_开头，C++层以php_vue_开头）
+  - 窗口管理：vue_window_create()/vue_window_show()/vue_quit_requested()/vue_peek_message()
+  - GDI绘制：vue_begin_paint()/vue_end_paint()/vue_fill_rect()/vue_draw_text()/vue_draw_button()
+- 作用
+  - Application通过这些函数与Win32交互
+  - GdiRenderContext委托C++层stub函数完成绘制
+
+章节来源
+- [stub/vue_calc.stub.php:12-24](file://stub/vue_calc.stub.php#L12-L24)
+- [cpp/vue_calc.cc:36-84](file://cpp/vue_calc.cc#L36-L84)
+- [cpp/vue_calc.cc:90-157](file://cpp/vue_calc.cc#L90-L157)
+
+## 依赖分析
+- 组件树依赖
+  - ReactiveComponent继承BaseComponent，实现ComponentInterface
+  - Application持有根组件与渲染器，负责事件循环与布局收集
+- 渲染依赖
+  - BaseRenderer依赖RenderContext；GdiRenderContext实现具体绘制
+  - 绘制原语委托C++层stub函数
+- 编译依赖
+  - SFC编译器生成组件类，注入getBindValue/dispatchClick/evalCondition等方法
 
 ```mermaid
 graph LR
-subgraph "编译时依赖"
-A[Calculator.vue] --> B[SFC Compiler]
-B --> C[Calculator.gen.php]
-B --> D[CalculatorLayout_gen.php]
-end
-subgraph "运行时依赖"
-E[CalcApp] --> F[Calculator]
-F --> G[ReactiveComponent]
-E --> H[CalcRenderer]
-H --> I[布局数据]
-H --> J[C++ GDI API]
-J --> K[Win32 API]
-end
-subgraph "工具链"
-L[模板解析器] --> M[AST节点]
-N[CSS映射] --> O[样式解析]
-P[AOT验证器] --> Q[代码验证]
-end
-C --> F
-D --> H
-B --> L
-B --> N
-B --> P
+APP["Application"] --> ROOT["ReactiveComponent"]
+ROOT --> BASE["BaseComponent"]
+BASE --> IFACE["ComponentInterface"]
+APP --> RDR["BaseRenderer"]
+RDR --> CTX["RenderContext"]
+CTX --> GDI["GdiRenderContext"]
+GDI --> CPP["C++ Stub Functions"]
+COMP["SFC编译器"] --> GEN["生成 *Component.php"]
+GEN --> ROOT
 ```
 
-**图表来源**
-- [sfc-compiler.php:19-25](file://tools/sfc-compiler.php#L19-L25)
-- [main.php:139-259](file://main.php#L139-L259)
+图表来源
+- [apps/calculator/Application.php:15-36](file://apps/calculator/Application.php#L15-L36)
+- [framework/BaseComponent.php:16-36](file://framework/BaseComponent.php#L16-L36)
+- [framework/ReactiveComponent.php:14-35](file://framework/ReactiveComponent.php#L14-L35)
+- [framework/BaseRenderer.php:15-26](file://framework/BaseRenderer.php#L15-L26)
+- [framework/rendering/RenderContext.php:13-29](file://framework/rendering/RenderContext.php#L13-L29)
+- [framework/rendering/GdiRenderContext.php:11-37](file://framework/rendering/GdiRenderContext.php#L11-L37)
+- [framework/sfc-compiler.php:513-581](file://framework/sfc-compiler.php#L513-L581)
+- [stub/vue_calc.stub.php:12-24](file://stub/vue_calc.stub.php#L12-L24)
+- [cpp/vue_calc.cc:36-84](file://cpp/vue_calc.cc#L36-L84)
 
-**章节来源**
-- [sfc-compiler.php:19-25](file://tools/sfc-compiler.php#L19-L25)
-- [main.php:139-259](file://main.php#L139-L259)
+章节来源
+- [apps/calculator/Application.php:15-36](file://apps/calculator/Application.php#L15-L36)
+- [framework/BaseComponent.php:16-36](file://framework/BaseComponent.php#L16-L36)
+- [framework/ReactiveComponent.php:14-35](file://framework/ReactiveComponent.php#L14-L35)
+- [framework/BaseRenderer.php:15-26](file://framework/BaseRenderer.php#L15-L26)
+- [framework/rendering/RenderContext.php:13-29](file://framework/rendering/RenderContext.php#L13-L29)
+- [framework/rendering/GdiRenderContext.php:11-37](file://framework/rendering/GdiRenderContext.php#L11-L37)
+- [framework/sfc-compiler.php:513-581](file://framework/sfc-compiler.php#L513-L581)
+- [stub/vue_calc.stub.php:12-24](file://stub/vue_calc.stub.php#L12-L24)
+- [cpp/vue_calc.cc:36-84](file://cpp/vue_calc.cc#L36-L84)
 
 ## 性能考虑
-
-### 渲染优化策略
-
-1. **脏标记机制**：只有当组件状态发生变化时才触发重绘
-2. **双缓冲技术**：使用内存DC进行离屏渲染，减少闪烁
-3. **增量更新**：仅在状态变更时重新渲染，避免全量重绘
-4. **帧率控制**：约60FPS的渲染频率
-
-### 内存管理
-
-- **环形缓冲队列**：ChangeQueue使用固定大小的环形缓冲区
-- **对象池模式**：ReactiveComponent::initShared预分配资源
-- **垃圾回收**：PHP自动管理内存，C++层负责GDI对象清理
-
-### 并发模型
-
-- **单线程事件循环**：Windows消息循环处理所有UI事件
-- **同步渲染**：渲染操作在主线程执行，保证线程安全
-- **异步I/O**：消息队列处理用户输入事件
+- 渲染性能
+  - 两阶段分层渲染减少不必要的绘制，优先绘制最高层按钮
+  - 文本元素根据长度动态调整字号，避免溢出与过度绘制
+- 内存与类型安全（AOT）
+  - 遍历关联数组使用array_keys()+for循环，避免foreach类型推断问题
+  - 对嵌套数组使用(array)类型转换，确保后续访问安全
+- 事件循环
+  - 使用usleep(16ms)控制约60FPS，平衡流畅度与CPU占用
+- 脏标记驱动
+  - 仅在dirty为true时触发渲染，降低无效重绘
 
 ## 故障排除指南
+- 渲染异常
+  - 症状：渲染崩溃或无输出
+  - 排查：确认layout中elements/buttons字段为数组；检查condition字段类型
+  - 参考：BaseRenderer中对condition与数组类型的保护
+- 点击未响应
+  - 症状：点击无效果
+  - 排查：确认按钮在最高活跃层；检查evalCondition返回值；确认dispatchClick正确转发
+- 窗口创建失败
+  - 症状：initWindow返回false
+  - 排查：检查窗口创建参数与Win32 API返回值；查看错误输出
+- AOT校验失败
+  - 症状：生成文件未写入
+  - 排查：根据AOT验证报告修正生成代码；确保类型注解与接口契约一致
 
-### 常见问题及解决方案
-
-**窗口创建失败**
-- 检查Win32 API权限和系统兼容性
-- 验证窗口尺寸参数的有效性
-- 确认消息循环正常运行
-
-**渲染异常**
-- 检查GDI句柄有效性
-- 验证布局数据的完整性
-- 确认颜色值格式正确
-
-**计算错误**
-- 检查除零异常处理
-- 验证浮点数精度控制
-- 确认字符串到数值的转换
-
-**编译器错误**
-- 验证.vue文件语法正确性
-- 检查CSS样式映射规则
-- 确认模板解析器支持的标签
-
-**章节来源**
-- [main.php:152-227](file://main.php#L152-L227)
-- [Calculator.gen.php:138-148](file://src/Calculator.gen.php#L138-L148)
-
-## 版本兼容性与迁移
-
-### API版本规范
-
-**当前版本**：1.0.0
-**兼容性要求**：
-- PHP 8.0+ (用于AOT编译器)
-- Windows 7+ (Win32 API要求)
-- 支持native_types命名空间
-
-### 迁移指南
-
-**从旧版本升级**：
-1. 更新ReactiveComponent基类的构造函数参数
-2. 检查组件属性声明的兼容性
-3. 验证AOT编译器的语法支持
-4. 测试C++ GDI API的向后兼容性
-
-**向新架构迁移**：
-1. 使用SFC编译器替代手动布局生成
-2. 迁移CSS样式到新的映射系统
-3. 更新事件处理机制以支持新的分发模式
-4. 验证渲染管道的性能改进
-
-### 兼容性矩阵
-
-| 组件 | PHP版本 | Windows版本 | 编译器版本 |
-|------|---------|-------------|------------|
-| ReactiveComponent | 8.0+ | 7+ | 3.x |
-| CalcRenderer | 8.0+ | 7+ | 3.x |
-| CalcApp | 8.0+ | 7+ | 3.x |
-| SFC编译器 | CLI 8.0+ | 任意 | 3.x |
-
-**章节来源**
-- [project.yml:1-10](file://project.yml#L1-L10)
-- [sfc-compiler.php:1-17](file://tools/sfc-compiler.php#L1-L17)
+章节来源
+- [framework/BaseRenderer.php:112-136](file://framework/BaseRenderer.php#L112-L136)
+- [apps/calculator/Application.php:223-239](file://apps/calculator/Application.php#L223-L239)
+- [apps/calculator/Application.php:59-62](file://apps/calculator/Application.php#L59-L62)
+- [framework/sfc-compiler.php:586-597](file://framework/sfc-compiler.php#L586-L597)
 
 ## 结论
+VueCalc框架通过清晰的接口与分层设计，实现了从SFC模板到组件类的自动化生成，并以响应式状态与脏标记驱动高效渲染。配合C++层Win32 API封装，形成稳定、可维护且具备AOT兼容性的桌面应用框架。开发者可基于本API参考文档快速构建与扩展组件，遵循最佳实践与注意事项，获得可靠的开发体验。
 
-VueCalc项目展示了现代桌面应用开发的最佳实践，通过以下关键技术实现了高性能和可维护性：
+## 附录
 
-1. **响应式架构**：基于ReactiveComponent的组件化设计
-2. **编译时优化**：SFC编译器将模板转换为高效的PHP代码
-3. **跨语言集成**：PHP业务逻辑与C++渲染引擎的无缝协作
-4. **数据驱动渲染**：状态变更自动触发UI更新
-5. **严格的类型系统**：利用native_types确保类型安全
+### API使用最佳实践
+- 组件开发
+  - 明确声明业务属性并在修改后设置dirty
+  - 使用getBindValue按绑定键返回对应值
+  - 在dispatchClick中根据handler映射调用相应方法
+- 布局与渲染
+  - 合理使用layer与condition，避免复杂条件导致命中测试开销过大
+  - 文本对齐与容器尺寸配合使用，确保布局稳定
+- 事件处理
+  - 在事件循环中捕获异常，避免中断渲染循环
+  - 点击命中测试从最高层逆序进行，保证覆盖层优先响应
 
-该架构为类似的应用程序提供了完整的开发框架，包括编译器、运行时环境和工具链的完整解决方案。开发者可以基于此架构快速构建复杂的桌面应用程序，同时享受现代Web开发的便利性和性能优势。
+### 常见陷阱与规避
+- foreach类型推断问题
+  - 规避：遍历关联数组时使用array_keys()+for循环
+- 嵌套数组类型丢失
+  - 规避：对返回的嵌套数组使用(array)类型转换
+- 条件字段类型不匹配
+  - 规避：确保condition为数组，否则跳过该元素/按钮
+- 窗口与消息处理
+  - 规避：正确处理WM_QUIT与退出标志，避免资源泄漏
