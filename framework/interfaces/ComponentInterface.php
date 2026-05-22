@@ -19,7 +19,8 @@ interface ComponentInterface
 
     /**
      * 获取组件布局数据（不含偏移/绑定替换）
-     * 返回格式: ['elements' => [], 'buttons' => []]
+     * 返回格式: ['elements' => [...]]
+     *   elements 包含: rect, text, button 等类型，通过 type 字段区分
      */
     public function getLayout(): array;
 

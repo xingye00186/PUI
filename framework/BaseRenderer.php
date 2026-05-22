@@ -88,26 +88,24 @@ class BaseRenderer
     }
 
     /**
-     * 数据驱动渲染: 两阶段分层渲染 (v5 M3)
+     * 数据驱动渲染: 两阶段分层渲染 (v6 M2)
      *
-     * @param array $layout 预处理后的布局数据 ['elements' => [], 'buttons' => []]
+     * @param array $layout 预处理后的布局数据 ['elements' => [...]]
+     *   elements 包含: rect, text, button 等类型
      * AOT 修复: array_keys() + for 循环, 避免 foreach 遍历关联数组时的类型推断问题
      */
     public function render(array $layout): void
     {
-        // v5 M4: 消费 dirty 状态
-        $dirtyInfo = $this->component->consumeDirty();
 
         $this->ctx->beginFrame();
 
-        // 获取预处理后的布局数据
+        // 获取预处理后的布局数据（统一 elements 数组）
         $elements = (array)($layout['elements'] ?? []);
-        $buttons = (array)($layout['buttons'] ?? []);
 
         // ====== Phase 1: 确定最高活跃层 ======
         $maxLayer = 0;
 
-        // 遍历 elements (AOT 安全)
+        // 遍历所有元素 (AOT 安全)
         $elCount = count($elements);
         for ($i = 0; $i < $elCount; $i++) {
             $el = $elements[$i];
@@ -120,22 +118,8 @@ class BaseRenderer
             if ($layer > $maxLayer) $maxLayer = $layer;
         }
 
-        // 遍历 buttons (AOT 安全)
-        $btnCount = count($buttons);
-        for ($i = 0; $i < $btnCount; $i++) {
-            $btn = $buttons[$i];
-            if (!is_array($btn)) continue;
-            // condition 字段必须是数组（AOT 可能将其推断为 int）
-            $cond = $btn['condition'] ?? null;
-            if ($cond !== null && !is_array($cond)) continue;
-            if ($cond !== null && !$this->component->evalCondition($cond)) continue;
-            $layer = $btn['layer'] ?? 0;
-            if ($layer > $maxLayer) $maxLayer = $layer;
-        }
-
-        // ====== Phase 2: 分层渲染 ======
+        // ====== Phase 2: 分层渲染（统一遍历 elements） ======
         for ($l = 0; $l <= $maxLayer; $l++) {
-            // 本层元素
             for ($i = 0; $i < $elCount; $i++) {
                 $el = $elements[$i];
                 if (!is_array($el)) continue;
@@ -144,7 +128,9 @@ class BaseRenderer
                 $cond = $el['condition'] ?? null;
                 if ($cond !== null && !is_array($cond)) continue;
                 if ($cond !== null && !$this->component->evalCondition($cond)) continue;
+
                 $type = $el['type'] ?? 'rect';
+
                 if ($type === 'rect') {
                     $this->ctx->fillRect(
                         $el['x'] ?? 0,
@@ -155,36 +141,25 @@ class BaseRenderer
                     );
                 } elseif ($type === 'text') {
                     $this->renderTextElement($el);
+                } elseif ($type === 'button') {
+                    // 绘制按钮背景和边框
+                    $this->ctx->drawButton(
+                        $el['x'] ?? 0,
+                        $el['y'] ?? 0,
+                        $el['w'] ?? 0,
+                        $el['h'] ?? 0,
+                        $el['bg'] ?? 0,
+                        $el['border'] ?? 0
+                    );
+                    // 按钮文字居中
+                    $label = $el['label'] ?? '';
+                    $labelLen = strlen($label);
+                    $labelFontSize = 22;
+                    $labelCharW = (int)($labelFontSize * 0.6);
+                    $labelX = ($el['x'] ?? 0) + (int)((($el['w'] ?? 0) - $labelLen * $labelCharW) / 2);
+                    $labelY = ($el['y'] ?? 0) + (int)((($el['h'] ?? 0) - $labelFontSize) / 2);
+                    $this->ctx->drawText($labelX, $labelY, $label, $labelFontSize, $el['fg'] ?? 0xFFFFFF, 1);
                 }
-            }
-            // 本层按钮
-            for ($i = 0; $i < $btnCount; $i++) {
-                $btn = $buttons[$i];
-                if (!is_array($btn)) continue;
-                $btnLayer = $btn['layer'] ?? 0;
-                if ($btnLayer !== $l) continue;
-                // condition 字段必须是数组
-                $cond = $btn['condition'] ?? null;
-                if ($btnLayer < $maxLayer && $cond !== null) continue;
-                if ($cond !== null && !is_array($cond)) continue;
-                if ($cond !== null && !$this->component->evalCondition($cond)) continue;
-                // 安全访问: 使用 ?? 提供默认值
-                $this->ctx->drawButton(
-                    $btn['x'] ?? 0,
-                    $btn['y'] ?? 0,
-                    $btn['w'] ?? 0,
-                    $btn['h'] ?? 0,
-                    $btn['bg'] ?? 0,
-                    $btn['border'] ?? 0
-                );
-                // 按钮文字居中
-                $label = $btn['label'] ?? '';
-                $labelLen = strlen($label);
-                $labelFontSize = 22;
-                $labelCharW = (int)($labelFontSize * 0.6);
-                $labelX = ($btn['x'] ?? 0) + (int)((($btn['w'] ?? 0) - $labelLen * $labelCharW) / 2);
-                $labelY = ($btn['y'] ?? 0) + (int)((($btn['h'] ?? 0) - $labelFontSize) / 2);
-                $this->ctx->drawText($labelX, $labelY, $label, $labelFontSize, $btn['fg'] ?? 0xFFFFFF, 1);
             }
         }
 

@@ -438,14 +438,18 @@ if (count($condProps) > 0) {
     $evalConditionBody = "        return true; // no conditions defined";
 }
 
-// v6 M2: Generate getLayout() body
+// v6 M2: Generate getLayout() body (统一 elements 数组)
 $elementsExport = varExportShort($elements);
 $buttonsExport = varExportShort($buttons);
+// 合并 buttons 到 elements，添加 type: 'button' 标记
+$mergedElements = varExportShort(array_merge($elements, array_map(function($btn) {
+    $btn['type'] = 'button';
+    return $btn;
+}, $buttons)));
 $getLayoutBody = <<<PHP
     {
         return [
-            'elements' => {$elementsExport},
-            'buttons'  => {$buttonsExport},
+            'elements' => {$mergedElements},
         ];
     }
 PHP;
@@ -722,9 +726,14 @@ if ($isRootComponent && count($childComponentInfo) > 0) {
             $childEvalCondition = "        return true; // no conditions defined";
         }
 
-        // 生成子组件的 getLayout
+        // 生成子组件的 getLayout (v6 M2: 统一 elements 数组)
         $childElementsExport = varExportShort($childElements);
         $childButtonsExport = varExportShort($childButtons);
+        // 合并 buttons 到 elements，添加 type: 'button' 标记
+        $childMergedElements = varExportShort(array_merge($childElements, array_map(function($btn) {
+            $btn['type'] = 'button';
+            return $btn;
+        }, $childButtons)));
 
         // 组装子组件类
         $childClassContent = <<<PHP
@@ -744,12 +753,12 @@ $childClassBody
 
     /**
      * 获取组件布局数据
+     * v6 M2: 统一 elements 数组，按 type 区分 rect/text/button
      */
     public function getLayout(): array
     {
         return [
-            'elements' => {$childElementsExport},
-            'buttons'  => {$childButtonsExport},
+            'elements' => {$childMergedElements},
         ];
     }
 
