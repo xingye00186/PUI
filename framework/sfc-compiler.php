@@ -795,4 +795,71 @@ if ($isRootComponent) {
     echo "  Generated:  $constantsPath (" . strlen($constantsContent) . " bytes)\n";
 }
 
+// v6 M3: 扫描 gen/ 目录下所有组件类
+$genDir = $appDir . DIRECTORY_SEPARATOR . 'gen';
+$allComponentClasses = [];
+
+// 扫描主组件
+$allComponentClasses[$componentClassName] = true;
+
+// 扫描子组件
+foreach ($childComponentInfo as $child) {
+    $allComponentClasses[$child['componentClass']] = true;
+}
+
+// 扫描 gen/ 目录下所有 *Component.php 文件
+if (is_dir($genDir)) {
+    $files = glob($genDir . '/*Component.php');
+    foreach ($files as $file) {
+        $fileName = basename($file, '.php');
+        $allComponentClasses[$fileName] = true;
+    }
+}
+
+// 生成工厂类
+$factoryContent = <<<PHP
+<?php
+
+/**
+ * ComponentFactory - 组件工厂类 (v6 M3)
+ *
+ * 由 SFC 编译器自动生成，使用 switch-case 创建组件实例（AOT 安全）。
+ * 已扫描 gen/ 目录下所有组件类。
+ */
+class ComponentFactory
+{
+    /**
+     * 通过类名创建组件实例 (AOT 安全：switch-case 替代动态 new)
+     *
+     * @param string \$className 组件类名
+     * @param array \$props 组件属性
+     * @return ComponentInterface
+     */
+    public static function create(string \$className, array \$props = []): ComponentInterface
+    {
+        switch (\$className) {
+PHP;
+
+// 添加所有组件的 case（使用 any() 丢弃类型推断）
+foreach (array_keys($allComponentClasses) as $className) {
+    $factoryContent .= "            case '$className':\n";
+    $factoryContent .= "                \$comp = any(new $className());\n";
+    $factoryContent .= "                if (method_exists(\$comp, 'setProps')) { \$comp->setProps(\$props); }\n";
+    $factoryContent .= "                break;\n";
+}
+
+$factoryContent .= <<<PHP
+            default:
+                throw new \RuntimeException("Component not found: \$className");
+        }
+
+        return \$comp;
+    }
+}
+PHP;
+
+$factoryPath = $outDir . DIRECTORY_SEPARATOR . 'ComponentFactory.php';
+file_put_contents($factoryPath, $factoryContent);
+echo "  Generated:  $factoryPath (" . strlen($factoryContent) . " bytes)\n";
+
 echo "\nDone.\n";

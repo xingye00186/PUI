@@ -140,25 +140,14 @@ class Application
 
     /**
      * 创建组件实例
+     * v6 M3: 使用 ComponentFactory 替代动态 new
      * @param string $type 组件类名
      * @param array $props 组件属性
      * @return ComponentInterface
      */
     private function createComponentInstance(string $type, array $props): ComponentInterface
     {
-        // 支持带命名空间的类名
-        if (strpos($type, '\\') === false) {
-            $type = 'components\\' . $type;
-        }
-
-        $comp = new $type();
-
-        // 注入 props（保留 _poolKey 用于缓存池标识）
-        if (method_exists($comp, 'setProps')) {
-            $comp->setProps($props);
-        }
-
-        return $comp;
+        return ComponentFactory::create($type, $props);
     }
 
     /**
