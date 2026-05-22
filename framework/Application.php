@@ -30,13 +30,14 @@ class Application
     {
         $this->rootComponent = $root;
         $this->ctx = $ctx;
+        $this->initRender();
     }
 
     /**
-     * 初始化窗口
+     * 初始化渲染器
      * v6 M2: 从根组件获取初始组件树并挂载
      */
-    public function initWindow(): bool
+    public function initRender(): bool
     {
         // v6 M2: 从根组件获取初始组件树并挂载
         if ($this->rootComponent !== null) {
@@ -46,7 +47,6 @@ class Application
         // v6 M2: 创建渲染器（hWnd 由 ctx 持有）
         $this->renderer = new BaseRenderer($this->rootComponent, $this->ctx);
 
-        echo "Window initialized (SFC Component Mode v6 M2)\n";
         return true;
     }
 
@@ -81,41 +81,39 @@ class Application
      * 收集所有活跃组件的布局数据并应用偏移
      * v6 M2 核心逻辑: 遍历组件树，动态应用 offset/props
      *
-     * @return array ['elements' => [], 'buttons' => []]
+     * @return array ['elements' => [...]] (统一 elements 数组，包含 rect/text/button)
      */
     public function getActiveLayout(): array
     {
         if ($this->rootComponent === null) {
-            return ['elements' => [], 'buttons' => []];
+            return ['elements' => []];
         }
 
         $allElements = [];
-        $allButtons = [];
 
-        $this->collectLayoutRecursive($this->rootComponent, 0, 0, $allElements, $allButtons);
+        $this->collectLayoutRecursive($this->rootComponent, 0, 0, $allElements);
 
-        return ['elements' => $allElements, 'buttons' => $allButtons];
+        return ['elements' => $allElements];
     }
 
     /**
      * 递归收集组件树布局数据
+     * v6 M2: buttons 合并到 elements 中
      *
      * @param ComponentInterface $comp 当前组件
      * @param int $offsetX 累积 X 偏移
      * @param int $offsetY 累积 Y 偏移
-     * @param array &$elements 收集的元素
-     * @param array &$buttons 收集的按钮
+     * @param array &$elements 收集的元素（包含 rect/text/button）
      */
     private function collectLayoutRecursive(
         ComponentInterface $comp,
         int $offsetX,
         int $offsetY,
-        array &$elements,
-        array &$buttons
+        array &$elements
     ): void {
         $layout = $comp->getLayout();
 
-        // 应用偏移到 elements (AOT 安全)
+        // 统一处理 elements (AOT 安全)
         $layoutElements = (array)($layout['elements'] ?? []);
         $elCount = count($layoutElements);
         for ($i = 0; $i < $elCount; $i++) {
@@ -134,18 +132,6 @@ class Application
             }
         }
 
-        // 应用偏移到 buttons (AOT 安全)
-        $layoutButtons = (array)($layout['buttons'] ?? []);
-        $btnCount = count($layoutButtons);
-        for ($i = 0; $i < $btnCount; $i++) {
-            $btn = $layoutButtons[$i];
-            if (is_array($btn)) {
-                $btn['x'] = ($btn['x'] ?? 0) + $offsetX;
-                $btn['y'] = ($btn['y'] ?? 0) + $offsetY;
-                $buttons[] = $btn;
-            }
-        }
-
         // 递归处理子组件
         $children = $comp->getChildren();
         $childIds = array_keys($children);
@@ -159,8 +145,7 @@ class Application
                 $child,
                 $offsetX + $childOffsetX,
                 $offsetY + $childOffsetY,
-                $elements,
-                $buttons
+                $elements
             );
         }
     }
@@ -230,12 +215,24 @@ class Application
 
     /**
      * 处理鼠标点击: 分层命中测试
-     * v6 M2: 从 activeComponents 收集布局
+     * v6 M2: 从 elements 中筛选 type='button' 的元素
      */
     private function handleClick(int $x, int $y): void
     {
         $layout = $this->getActiveLayout();
-        $buttons = (array)($layout['buttons'] ?? []);
+        $elements = (array)($layout['elements'] ?? []);
+
+        // 收集所有按钮元素
+        $buttons = [];
+        $elCount = count($elements);
+        for ($i = 0; $i < $elCount; $i++) {
+            $el = $elements[$i];
+            if (!is_array($el)) continue;
+            if (($el['type'] ?? '') === 'button') {
+                $buttons[] = $el;
+            }
+        }
+
         $btnCount = count($buttons);
 
         // Phase 1: 确定最高活跃层 (AOT 安全)

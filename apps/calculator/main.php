@@ -42,6 +42,8 @@ function main(): int
         return 1;
     }
 
+     echo "Window initialized (SFC Component Mode v6 M2)\n";
+
     vue_window_show($hWnd, SW_SHOW);
 
     // 3. 创建渲染上下文（持有 hWnd）
@@ -50,7 +52,6 @@ function main(): int
     // 4. 创建应用控制器
     //    initWindow() 中会自动调用 root->getBaseComponents() 获取并挂载初始组件树
     $app = new Application($root, $ctx);
-    $app->initWindow();
 
     // 5. 启动事件循环
     $app->run();
