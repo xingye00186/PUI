@@ -1,12 +1,12 @@
 <?php
 
-use native_types;
-
 /**
  * BaseRenderer - 泛化数据驱动渲染器 (v6 M2)
  *
  * 仅保留渲染调度逻辑，组件管理移至 Application。
  * 支持两阶段分层渲染 (v5 M3 layer 机制)。
+ *
+ * hdc 由 GdiRenderContext 内部持有，绘制方法不需要传递 hdc 参数。
  *
  * AOT 限制:
  *   - foreach 遍历关联数组时 key 类型推断错误 → 使用 array_keys() + for 循环
@@ -14,13 +14,11 @@ use native_types;
  */
 class BaseRenderer
 {
-    private int $hWnd;
     private ReactiveComponent $component;
     private RenderContext $ctx;
 
-    public function __construct(int $hWnd, ReactiveComponent $component, RenderContext $ctx)
+    public function __construct(ReactiveComponent $component, RenderContext $ctx)
     {
-        $this->hWnd = $hWnd;
         $this->component = $component;
         $this->ctx = $ctx;
     }
@@ -32,7 +30,7 @@ class BaseRenderer
     }
 
     /** 渲染文本元素（支持对齐和动态字号） */
-    protected function renderTextElement(int $hdc, array $el): void
+    protected function renderTextElement(array $el): void
     {
         $bindKey = $el['bind'] ?? '';
 
@@ -86,7 +84,7 @@ class BaseRenderer
             }
         }
 
-        $this->ctx->drawText($hdc, $x, $y, $text, $fontSize, $color, $bold);
+        $this->ctx->drawText($x, $y, $text, $fontSize, $color, $bold);
     }
 
     /**
@@ -100,7 +98,7 @@ class BaseRenderer
         // v5 M4: 消费 dirty 状态
         $dirtyInfo = $this->component->consumeDirty();
 
-        $hdc = $this->ctx->beginFrame($this->hWnd);
+        $this->ctx->beginFrame();
 
         // 获取预处理后的布局数据
         $elements = (array)($layout['elements'] ?? []);
@@ -149,7 +147,6 @@ class BaseRenderer
                 $type = $el['type'] ?? 'rect';
                 if ($type === 'rect') {
                     $this->ctx->fillRect(
-                        $hdc,
                         $el['x'] ?? 0,
                         $el['y'] ?? 0,
                         $el['w'] ?? 0,
@@ -157,7 +154,7 @@ class BaseRenderer
                         $el['color'] ?? 0
                     );
                 } elseif ($type === 'text') {
-                    $this->renderTextElement($hdc, $el);
+                    $this->renderTextElement($el);
                 }
             }
             // 本层按钮
@@ -173,7 +170,6 @@ class BaseRenderer
                 if ($cond !== null && !$this->component->evalCondition($cond)) continue;
                 // 安全访问: 使用 ?? 提供默认值
                 $this->ctx->drawButton(
-                    $hdc,
                     $btn['x'] ?? 0,
                     $btn['y'] ?? 0,
                     $btn['w'] ?? 0,
@@ -188,10 +184,10 @@ class BaseRenderer
                 $labelCharW = (int)($labelFontSize * 0.6);
                 $labelX = ($btn['x'] ?? 0) + (int)((($btn['w'] ?? 0) - $labelLen * $labelCharW) / 2);
                 $labelY = ($btn['y'] ?? 0) + (int)((($btn['h'] ?? 0) - $labelFontSize) / 2);
-                $this->ctx->drawText($hdc, $labelX, $labelY, $label, $labelFontSize, $btn['fg'] ?? 0xFFFFFF, 1);
+                $this->ctx->drawText($labelX, $labelY, $label, $labelFontSize, $btn['fg'] ?? 0xFFFFFF, 1);
             }
         }
 
-        $this->ctx->endFrame($this->hWnd, $hdc);
+        $this->ctx->endFrame();
     }
 }

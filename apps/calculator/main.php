@@ -30,17 +30,29 @@ function main(): int
     $root = new AppComponent('App');
     $root->initShared(10240);
 
-    // 2. 创建渲染上下文 (v6 M1)
-    $ctx = new GdiRenderContext();
+    // 2. 初始化窗口，获取 hWnd
+    $hWnd = vue_window_create(
+        'SFC Data-Driven App',
+        WINDOW_WIDTH,
+        WINDOW_HEIGHT
+    );
 
-    // 3. 创建应用控制器
-    //    initWindow() 中会自动调用 root->getBaseComponents() 获取并挂载初始组件树
-    $app = new Application($root, $ctx);
-    if (!$app->initWindow()) {
+    if ($hWnd == 0) {
+        echo "Error: window creation failed!\n";
         return 1;
     }
 
-    // 4. 启动事件循环
+    vue_window_show($hWnd, SW_SHOW);
+
+    // 3. 创建渲染上下文（持有 hWnd）
+    $ctx = new GdiRenderContext($hWnd);
+
+    // 4. 创建应用控制器
+    //    initWindow() 中会自动调用 root->getBaseComponents() 获取并挂载初始组件树
+    $app = new Application($root, $ctx);
+    $app->initWindow();
+
+    // 5. 启动事件循环
     $app->run();
 
     echo "\nApplication closed.\n";

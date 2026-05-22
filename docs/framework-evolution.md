@@ -125,47 +125,38 @@ abstract class BaseComponent implements ComponentInterface
 - 删除 `attachLayout()` / `detachLayout()`
 - 删除 `getActiveLayout()`
 - 删除 `$activeLayouts` 属性
+- 删除 `$hWnd` 属性（v6 M2 新增）
 
 **新构造函数**:
 ```php
-public function __construct(int $hWnd, ReactiveComponent $component, RenderContext $ctx)
+public function __construct(ReactiveComponent $component, RenderContext $ctx)
 ```
 
 **render() 方法变更**:
 ```php
 public function render(array $layout): void  // 接收外部注入的布局数据
+// ctx->beginFrame() / ctx->endFrame() 无需传参（hdc 由 ctx 内部持有）
 ```
 
 ### Phase 4: Application 重构 [修改 1 个文件]
 
 | 步骤 | 文件 | 操作 |
 |------|------|------|
-| 4.1 | `apps/calculator/Application.php` | 重构 |
+| 4.1 | `framework/Application.php` | 重构（原 `apps/calculator/Application.php` 迁移） |
 
-**新增属性**:
-```php
-private array $activeComponents = [];  // id => ComponentInterface
-private ?ReactiveComponent $rootComponent = null;
-```
-
-**新增方法**:
-- `registerRootComponent(ReactiveComponent $root): void`
-- `attachComponents(array $components): void` - 批量挂载组件
-- `detachComponent(string $id): void`
-- `getActiveLayout(): array` - 布局收集逻辑
+**变更**:
+- 不再持有 `$hWnd` 属性（由 `GdiRenderContext` 持有）
+- `initWindow()` 简化，不再创建窗口
 
 **initWindow() 核心逻辑**:
 ```php
 public function initWindow(): bool
 {
-    $this->hWnd = vue_window_create(...);
-    vue_window_show($this->hWnd, SW_SHOW);
-
     // 从根组件获取初始组件树并挂载
     $this->attachComponents($this->rootComponent->getBaseComponents());
 
-    // 创建渲染器
-    $this->renderer = new BaseRenderer($this->hWnd, $this->rootComponent, $this->ctx);
+    // 创建渲染器（hWnd 由 ctx 持有）
+    $this->renderer = new BaseRenderer($this->rootComponent, $this->ctx);
     return true;
 }
 
@@ -260,17 +251,32 @@ class AppComponent extends ReactiveComponent
 | 6.1 | `apps/calculator/main.php` | 修改 |
 | 6.2 | `apps/calculator/project.yml` | 修改 |
 
-**main.php**:
+**main.php** (v6 M2 初始化顺序):
 ```php
 function main(): int
 {
-    // 仅创建根组件，子组件由根组件内部注册
+    // 1. 创建根组件，子组件由根组件内部注册
     $root = new AppComponent('App');
     $root->initShared(10240);
 
-    $ctx = new GdiRenderContext();
+    // 2. 初始化窗口，获取 hWnd
+    $hWnd = vue_window_create('VueCalc', WINDOW_WIDTH, WINDOW_HEIGHT);
+    if ($hWnd == 0) {
+        return 1;
+    }
+    vue_window_show($hWnd, SW_SHOW);
+
+    // 3. 创建渲染上下文（持有 hWnd 和 hdc）
+    $ctx = new GdiRenderContext($hWnd);
+
+    // 4. 创建应用控制器
     $app = new Application($root, $ctx);
+    $app->initWindow();
+
+    // 5. 启动事件循环
     $app->run();
+
+    return 0;
 }
 ```
 
@@ -287,22 +293,23 @@ sources:
 
 ## 关键文件清单
 
-### 新建文件 (2 个)
+### 新建文件 (3 个)
 - `framework/interfaces/ComponentInterface.php`
 - `framework/BaseComponent.php`
+- `framework/AntiPatternChecker.php` - 反模式检查工具
 
-### 修改文件 (6 个)
+### 修改文件 (8 个)
 - `framework/ReactiveComponent.php`
 - `framework/BaseRenderer.php`
-- `apps/calculator/Application.php`
+- `framework/Application.php` - 从 apps/calculator 迁移到 framework
+- `framework/rendering/RenderContext.php` - hWnd/hdc 参数移除
+- `framework/rendering/GdiRenderContext.php` - hWnd/hdc 内部持有
 - `framework/sfc-compiler.php`
 - `framework/compiler/component-resolver.php`
 - `apps/calculator/main.php`
-- `apps/calculator/project.yml`
 
-### 删除文件 (2 个)
-- `apps/calculator/gen/App.gen.php`
-- `apps/calculator/gen/AppLayout_gen.php`
+### 删除文件 (1 个)
+- `apps/calculator/Application.php` - 已迁移到 framework/Application.php
 
 ### 生成的文件 (5 个)
 - `apps/calculator/gen/AppComponent.php` - 根组件
@@ -323,6 +330,8 @@ sources:
 | **偏移处理** | 编译时内联到布局数据 | 运行时由 Application::collectLayoutRecursive() 动态应用 |
 | **组件初始化** | Application attach 所有布局段 | Application 调用根组件 getBaseComponents() 获取初始组件树 |
 | **职责划分** | BaseRenderer: 组件管理 + 渲染调度 | BaseRenderer: 仅渲染调度 |
+| **hWnd 持有者** | Application 和 BaseRenderer 各持有一份 | GdiRenderContext 持有 |
+| **hdc 管理** | 每帧作为参数传递 | GdiRenderContext 内部管理，绘制方法无 hdc 参数 |
 | **可扩展性** | 静态布局，无法动态增删 | 支持运行时 attach/detach 组件 |
 | **编译产物** | App.gen.php + AppLayout_gen.php | *Component.php (每个组件独立文件) |
 
@@ -402,6 +411,7 @@ $this->addChild(new AboutDialogComponent('about-dialog'), ['x' => 0, 'y' => 0]);
 | **开闭原则 (OCP)** | 新增组件类型只需实现 ComponentInterface，不修改渲染器 |
 | **里氏替换原则 (LSP)** | BaseComponent 提供了稳定的抽象基类 |
 | **接口隔离原则 (ISP)** | ComponentInterface 方法精简，各方法各司其职 |
+| **最少知识原则 (LoD)** | hWnd/hdc 仅由 GdiRenderContext 持有，BaseRenderer 不需要知道窗口细节 |
 
 ### 待完善之处
 
@@ -414,6 +424,40 @@ $this->addChild(new AboutDialogComponent('about-dialog'), ['x' => 0, 'y' => 0]);
 | **5. 缺乏单元测试基础设施** | 无 mock 框架，Application.getActiveLayout 难以单元测试 | P3 |
 | **6. 无错误边界机制** | 单个组件渲染失败会导致整个应用崩溃 | P3 |
 | **7. 组件类型系统不完整** | 无 slots、fragments、teleport 等高级概念 | P4 |
+
+### 资源所有权原则 (v6 M2 新增)
+
+**问题**：hWnd 和 hdc 作为渲染上下文的核心资源，如果分散在多个类中会导致：
+- 职责不清：谁负责窗口生命周期？
+- 重复持有：Application 和 BaseRenderer 各持有一份 hWnd
+- 调用污染：每个方法都需要传递 hWnd/hdc 参数
+
+**解决方案**：`GdiRenderContext` 作为唯一持有者
+
+```
+main.php
+  ├─ vue_window_create() → $hWnd
+  ├─ new GdiRenderContext($hWnd)  ← 持有 hWnd
+  │     ├─ beginFrame() → 获取 hdc，存入 $this->hdc
+  │     ├─ drawText(x, y, ...) → 使用 $this->hdc
+  │     └─ endFrame() → 提交缓冲，清空 $this->hdc
+  └─ new Application($root, $ctx)
+        └─ BaseRenderer($component, $ctx)  ← 无需 hWnd/hdc
+```
+
+**AntiPatternChecker 反模式检查工具**：
+
+| 检查项 | 说明 | 严重度 |
+|--------|------|--------|
+| `hwnd_in_app` | Application 不应持有 hWnd | ERROR |
+| `hwnd_in_renderer` | BaseRenderer 不应持有 hWnd | ERROR |
+| `hdc_in_renderer` | BaseRenderer 不应持有 hdc | ERROR |
+| `hwnd_not_in_render_ctx` | GdiRenderContext 必须持有 hWnd | ERROR |
+| `hdc_not_in_render_ctx` | GdiRenderContext 必须持有 hdc | ERROR |
+| `hdc_param_in_methods` | 绘制方法不应接收 hdc 参数 | WARN |
+| `direct_cpp_call` | 业务代码不应直接调用 vue_* 函数 | ERROR |
+
+运行命令：`php framework/AntiPatternChecker.php framework/`
 
 ---
 

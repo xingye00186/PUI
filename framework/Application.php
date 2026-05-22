@@ -20,9 +20,6 @@ class Application
     /** 活跃组件列表 (id => ComponentInterface) */
     private array $activeComponents = [];
 
-    /** 当前窗口句柄 */
-    private int $hWnd = 0;
-
     /** 渲染器 */
     private BaseRenderer $renderer;
 
@@ -36,42 +33,20 @@ class Application
     }
 
     /**
-     * 注册根组件（v6 M2）
-     * 由 main.php 在创建 Application 时调用
-     */
-    public function registerRootComponent(ReactiveComponent $root): void
-    {
-        $this->rootComponent = $root;
-    }
-
-    /**
      * 初始化窗口
      * v6 M2: 从根组件获取初始组件树并挂载
      */
     public function initWindow(): bool
     {
-        $this->hWnd = vue_window_create(
-            'VueCalc - SFC Data-Driven App',
-            WINDOW_WIDTH,
-            WINDOW_HEIGHT
-        );
-
-        if ($this->hWnd == 0) {
-            echo "Error: window creation failed!\n";
-            return false;
-        }
-
-        vue_window_show($this->hWnd, SW_SHOW);
-
         // v6 M2: 从根组件获取初始组件树并挂载
         if ($this->rootComponent !== null) {
             $this->attachComponents($this->rootComponent->getBaseComponents());
         }
 
-        // v6 M2: 创建渲染器，注入预处理后的布局数据
-        $this->renderer = new BaseRenderer($this->hWnd, $this->rootComponent, $this->ctx);
+        // v6 M2: 创建渲染器（hWnd 由 ctx 持有）
+        $this->renderer = new BaseRenderer($this->rootComponent, $this->ctx);
 
-        echo "Window created (SFC Component Mode v6 M2)\n";
+        echo "Window initialized (SFC Component Mode v6 M2)\n";
         return true;
     }
 
@@ -100,15 +75,6 @@ class Application
             $this->activeComponents[$id]->onDetach();
             unset($this->activeComponents[$id]);
         }
-    }
-
-    /**
-     * 获取活跃组件列表
-     * @return array ComponentInterface[]
-     */
-    public function getActiveComponents(): array
-    {
-        return $this->activeComponents;
     }
 
     /**

@@ -12,9 +12,10 @@ no-console: false
 sources:
   # 应用代码
   - main.php
-  - Application.php
+
   - ./gen
   # 框架运行时 (构建工具 compiler/ 不在此列)
+  - ../../framework/Application.php
   - ../../framework/interfaces/ComponentInterface.php
   - ../../framework/BaseComponent.php
   - ../../framework/ReactiveComponent.php

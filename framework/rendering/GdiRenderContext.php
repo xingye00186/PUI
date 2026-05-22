@@ -1,37 +1,46 @@
 <?php
 
-use native_types;
-
 /**
- * GdiRenderContext - Win32 GDI 后端实现 (v6 M1)
- * 
+ * GdiRenderContext - Win32 GDI 后端实现 (v6 M2)
+ *
  * 直接委托给 C++ phpx 扩展提供的 vue_* stub 函数。
  * 当前封装 5 个基础原语，未来 C++ 层扩展后可逐步添加新方法。
+ *
+ * hWnd 和 hdc 都由此类持有，绘制方法不需要传递 hdc 参数。
  */
 class GdiRenderContext extends RenderContext
 {
-    public function beginFrame(int $hWnd): int
+    private int $hWnd;
+    private int $hdc = 0;
+
+    public function __construct(int $hWnd)
     {
-        return vue_begin_paint($hWnd);
+        $this->hWnd = $hWnd;
     }
 
-    public function endFrame(int $hWnd, int $hdc): void
+    public function beginFrame(): void
     {
-        vue_end_paint($hWnd, $hdc);
+        $this->hdc = vue_begin_paint($this->hWnd);
     }
 
-    public function fillRect(int $hdc, int $x, int $y, int $w, int $h, int $color): void
+    public function endFrame(): void
     {
-        vue_fill_rect($hdc, $x, $y, $w, $h, $color);
+        vue_end_paint($this->hWnd, $this->hdc);
+        $this->hdc = 0;
     }
 
-    public function drawText(int $hdc, int $x, int $y, string $text, int $fontSize, int $color, int $bold): void
+    public function fillRect(int $x, int $y, int $w, int $h, int $color): void
     {
-        vue_draw_text($hdc, $x, $y, $text, $fontSize, $color, $bold);
+        vue_fill_rect($this->hdc, $x, $y, $w, $h, $color);
     }
 
-    public function drawButton(int $hdc, int $x, int $y, int $w, int $h, int $bg, int $border): void
+    public function drawText(int $x, int $y, string $text, int $fontSize, int $color, int $bold): void
     {
-        vue_draw_button($hdc, $x, $y, $w, $h, $bg, $border);
+        vue_draw_text($this->hdc, $x, $y, $text, $fontSize, $color, $bold);
+    }
+
+    public function drawButton(int $x, int $y, int $w, int $h, int $bg, int $border): void
+    {
+        vue_draw_button($this->hdc, $x, $y, $w, $h, $bg, $border);
     }
 }
