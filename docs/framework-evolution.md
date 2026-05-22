@@ -251,43 +251,120 @@ class AppComponent extends ReactiveComponent
 | 6.1 | `apps/calculator/main.php` | 修改 |
 | 6.2 | `apps/calculator/project.yml` | 修改 |
 
-**main.php** (v6 M2 初始化顺序):
+---
+
+## Phase 7: ComponentFactory 工厂模式 [新增]
+
+AOT 编译环境下，同一变量不能赋值不同类型对象。使用 switch-case 工厂 + `any()` 函数解决动态实例化问题。
+
+### 7.1 设计背景
+
+**问题**：AOT 编译器要求变量类型不可变，`new $className()` 动态实例化在 switch-case 中会导致类型冲突：
+
 ```php
-function main(): int
-{
-    // 1. 创建根组件，子组件由根组件内部注册
-    $root = new AppComponent('App');
-    $root->initShared(10240);
-
-    // 2. 初始化窗口，获取 hWnd
-    $hWnd = vue_window_create('VueCalc', WINDOW_WIDTH, WINDOW_HEIGHT);
-    if ($hWnd == 0) {
-        return 1;
-    }
-    vue_window_show($hWnd, SW_SHOW);
-
-    // 3. 创建渲染上下文（持有 hWnd 和 hdc）
-    $ctx = new GdiRenderContext($hWnd);
-
-    // 4. 创建应用控制器
-    $app = new Application($root, $ctx);
-    $app->initWindow();
-
-    // 5. 启动事件循环
-    $app->run();
-
-    return 0;
+// ❌ AOT 编译失败: Cannot re-assign typed object
+switch ($className) {
+    case 'AppComponent':
+        $comp = new AppComponent();  // $comp 类型化为 AppComponent
+        break;
+    case 'DisplayPanelComponent':
+        $comp = new DisplayPanelComponent();  // 错误! $comp 已类型化
+        break;
 }
 ```
 
-**project.yml** (新增 ComponentInterface.php):
-```yaml
-sources:
-  - ../../framework/interfaces/ComponentInterface.php  # 新增
-  - ../../framework/BaseComponent.php
-  - ../../framework/ReactiveComponent.php
-  # ...
+**解决**：使用 `any()` 函数丢弃类型推断 + switch-case 编译期分发：
+
+```php
+// ✅ AOT 安全: any() 丢弃类型推断
+switch ($className) {
+    case 'AppComponent':
+        $comp = any(new AppComponent());
+        break;
+    case 'DisplayPanelComponent':
+        $comp = any(new DisplayPanelComponent());
+        break;
+}
+return $comp;
 ```
+
+### 7.2 生成的 ComponentFactory.php
+
+```php
+class ComponentFactory
+{
+    public static function create(string $className, array $props = []): ComponentInterface
+    {
+        $comp = null;
+        switch ($className) {
+            case 'AppComponent':
+                $comp = any(new AppComponent());
+                if (method_exists($comp, 'setProps')) { $comp->setProps($props); }
+                break;
+            case 'DisplayPanelComponent':
+                $comp = any(new DisplayPanelComponent());
+                if (method_exists($comp, 'setProps')) { $comp->setProps($props); }
+                break;
+            // ... 更多组件
+            default:
+                throw new \RuntimeException("Component not found: $className");
+        }
+        return $comp;
+    }
+}
+```
+
+### 7.3 SFC 编译器生成逻辑
+
+sfc-compiler.php 在编译时：
+1. 扫描 `gen/` 目录下所有 `*Component.php` 文件
+2. 提取类名（不含命名空间）
+3. 生成完整的 switch-case 工厂方法
+
+```php
+// sfc-compiler.php 中的扫描逻辑
+$genDir = $appDir . DIRECTORY_SEPARATOR . 'gen';
+$files = glob($genDir . '/*Component.php');
+$allComponentClasses = [];
+foreach ($files as $file) {
+    $fileName = basename($file, '.php');
+    $allComponentClasses[$fileName] = true;
+}
+```
+
+### 7.4 Application 中的使用
+
+```php
+private array $componentPool = [];  // 缓存已卸载的组件实例
+
+private function createComponentInstance(string $type, array $props): ComponentInterface
+{
+    // v-if 场景：优先从缓存池获取
+    if (isset($this->componentPool[$type])) {
+        $comp = $this->componentPool[$type];
+        unset($this->componentPool[$type]);
+        if (method_exists($comp, 'setProps')) {
+            $comp->setProps($props);
+        }
+        return $comp;
+    }
+    // 首次创建：通过工厂
+    return ComponentFactory::create($type, $props);
+}
+```
+
+### 7.5 any() 函数说明
+
+`any()` 是 Swoole Compiler AOT 环境的内置函数，用于**丢弃变量类型推断**：
+
+```php
+any(mixed $value): mixed
+```
+
+作用与 PHP 8 的 `mixed` 类型声明类似，但专门用于 AOT 编译场景：
+- 允许同一变量在不同分支赋值不同类型对象
+- AOT 编译器不再对变量进行类型锁定
+- 每个 `any()` 调用返回值的类型以最后一个分支为准
 
 ---
 
@@ -298,24 +375,26 @@ sources:
 - `framework/BaseComponent.php`
 - `framework/AntiPatternChecker.php` - 反模式检查工具
 
-### 修改文件 (8 个)
+### 修改文件 (10 个)
 - `framework/ReactiveComponent.php`
 - `framework/BaseRenderer.php`
 - `framework/Application.php` - 从 apps/calculator 迁移到 framework
 - `framework/rendering/RenderContext.php` - hWnd/hdc 参数移除
 - `framework/rendering/GdiRenderContext.php` - hWnd/hdc 内部持有
-- `framework/sfc-compiler.php`
+- `framework/sfc-compiler.php` - 生成 ComponentFactory
 - `framework/compiler/component-resolver.php`
 - `apps/calculator/main.php`
+- `apps/calculator/Application.php` - 已迁移到 framework/Application.php
 
 ### 删除文件 (1 个)
 - `apps/calculator/Application.php` - 已迁移到 framework/Application.php
 
-### 生成的文件 (5 个)
+### 生成的文件 (6 个)
 - `apps/calculator/gen/AppComponent.php` - 根组件
 - `apps/calculator/gen/DisplayPanelComponent.php` - 子组件
 - `apps/calculator/gen/NumPadComponent.php` - 子组件
 - `apps/calculator/gen/AboutDialogComponent.php` - 子组件
+- `apps/calculator/gen/ComponentFactory.php` - 组件工厂 (v6 M2 新增)
 - `apps/calculator/gen/constants.php` - 窗口常量
 
 ---
