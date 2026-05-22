@@ -1,4 +1,4 @@
-# VueCalc 框架演进文档 (v6 M4)
+# VueCalc 框架演进文档 (v6 M5)
 
 ## Context
 
@@ -370,10 +370,11 @@ any(mixed $value): mixed
 
 ## 关键文件清单
 
-### 新建文件 (3 个)
+### 新建文件 (4 个)
 - `framework/interfaces/ComponentInterface.php`
 - `framework/BaseComponent.php`
 - `framework/AntiPatternChecker.php` - 反模式检查工具
+- `framework/FocusManager.php` - 焦点系统管理器 (v6 M5)
 
 ### 修改文件 (10 个)
 - `framework/ReactiveComponent.php`
@@ -383,8 +384,9 @@ any(mixed $value): mixed
 - `framework/rendering/GdiRenderContext.php` - hWnd/hdc 内部持有
 - `framework/sfc-compiler.php` - 生成 ComponentFactory
 - `framework/compiler/component-resolver.php`
+- `framework/compiler/template-parser.php` - v6 M5: ListItem, ScrollContainer, clickable rect
+- `framework/compiler/ast-nodes.php` - v6 M5: ListItemNode, ScrollContainerNode
 - `apps/calculator/main.php`
-- `apps/calculator/Application.php` - 已迁移到 framework/Application.php
 
 ### 删除文件 (1 个)
 - `apps/calculator/Application.php` - 已迁移到 framework/Application.php
@@ -396,6 +398,9 @@ any(mixed $value): mixed
 - `apps/calculator/gen/AboutDialogComponent.php` - 子组件
 - `apps/calculator/gen/ComponentFactory.php` - 组件工厂 (v6 M2 新增)
 - `apps/calculator/gen/constants.php` - 窗口常量
+
+### 测试应用
+- `apps/list-test/` - v6 M5 功能测试应用 (v-for, ScrollContainer, FocusManager)
 
 ---
 
@@ -748,7 +753,7 @@ build.bat 会自动:
 ### 后续框架演进影响
 
 #### v6 M5 计划
-1. **v-for + 列表渲染引擎**: 支持动态数组数据渲染
+1. **v-for + 列表渲染引擎**: 支持动态数组数据渲染 ✅ (v6 M5)
 2. **ScrollContainer**: 滚动容器组件
 3. **FocusManager**: 焦点系统管理
 
@@ -760,3 +765,97 @@ build.bat 会自动:
 #### v6 M7 计划
 1. **元素类型系统**: 从数组结构升级为强类型 Element 类
 2. **布局 DSL**: 领域特定语言
+
+---
+
+## v6 M5 新增功能
+
+### 1. v-for 列表渲染引擎 ✅
+
+ListItemNode AST 节点 + expandListItemNode() 编译时展开，运行时数据绑定。
+
+**支持特性**:
+- `<list-item :items="dataArray" x="10" y="50" w="380" :item-height="50" />`
+- 静态生成 20 个列表项槽位
+- 动态绑定: `item_text_0`, `item_text_1`, ... `item_text_19`
+- 集成 deleteItem 按钮处理器
+
+**模板语法**:
+```vue
+<template>
+  <app x="0" y="0" w="400" h="500">
+    <list-item :items="todoItems"
+               x="10" y="50" w="380"
+               :item-height="50"
+               class="item-bg"
+               :text-bind="item.text"
+               @click="deleteItem"
+               :click-arg="item.id" />
+  </app>
+</template>
+```
+
+**相关文件**:
+- `framework/compiler/ast-nodes.php` - ListItemNode 定义
+- `framework/compiler/template-parser.php` - parseListItem() + expandListItemNode()
+
+### 2. Clickable Rect (可点击矩形) ✅
+
+`<rect>` 元素现在支持 `@click` 处理器，自动转换为按钮。
+
+**模板语法**:
+```vue
+<rect x="150" y="460" w="100" h="30" class="add-btn" @click="addItem" />
+```
+
+**编译时行为**:
+1. 解析 `@click` 属性提取 handler 和可选参数
+2. 生成按钮数据结构 (bg, fg, border, handler, arg)
+3. 添加到 handlerMap 用于 dispatchClick() 生成
+
+**相关文件**:
+- `framework/compiler/ast-nodes.php` - RectNode.clickHandler
+- `framework/compiler/template-parser.php` - RectNode @click 处理器
+
+### 3. ScrollContainer (滚动容器) ✅
+
+ScrollContainerNode AST 节点，支持滚动区域和滚动条渲染。
+
+**模板语法**:
+```vue
+<scroll-container x="10" y="50" w="380" h="400" :scroll-top="scrollTop">
+  <list-item :items="todoItems" ... />
+</scroll-container>
+```
+
+**编译时行为**:
+1. 解析容器尺寸和滚动绑定属性
+2. 计算子元素总高度 (contentHeight)
+3. 生成滚动容器元素 (bg, scrollbar-w, scrollbar-bg, scrollbar-thumb)
+4. 将子元素标记为 scroll-container = true
+
+**相关文件**:
+- `framework/compiler/ast-nodes.php` - ScrollContainerNode 定义
+- `framework/compiler/template-parser.php` - parseScrollContainer() 方法
+
+### 4. FocusManager (焦点系统) ✅
+
+FocusManager 类，支持焦点状态管理和 Tab 键导航。
+
+**核心功能**:
+- 从布局数据构建可聚焦元素列表
+- Tab/Shift+Tab 焦点导航
+- 焦点环 (focus ring) 绘制
+- 坐标定位焦点元素
+
+**使用方式**:
+```php
+$focus = new FocusManager($elements, $buttons);
+$focus->focusNext();  // Tab 键
+$focus->focusPrev();  // Shift+Tab
+$rect = $focus->getFocusedRect();  // 获取焦点环区域
+```
+
+**相关文件**:
+- `framework/FocusManager.php` - FocusManager 类
+- `framework/Application.php` - handleKeyboard() 键盘事件处理

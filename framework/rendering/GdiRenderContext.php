@@ -51,7 +51,49 @@ class GdiRenderContext extends RenderContext
             $this->drawButtonElement($el);
         } elseif ($type === 'textbox') {
             $this->drawTextBoxElement($el);
+        } elseif ($type === 'scroll-container') {
+            // v6 M5: 绘制滚动容器（背景 + 滚动条）
+            $this->drawScrollContainer($el);
         }
+        // v6 M5: list_index 元素作为普通元素绘制，带滚动偏移
+        // (list_index 元素 type 为 rect/text，由上面处理)
+    }
+
+    /**
+     * v6 M5: 绘制滚动容器
+     */
+    private function drawScrollContainer(array $el): void
+    {
+        $x = $el['x'] ?? 0;
+        $y = $el['y'] ?? 0;
+        $w = $el['w'] ?? 0;
+        $h = $el['h'] ?? 0;
+        $bg = $el['bg'] ?? 0x2D2D2D;
+        $sbW = $el['scrollbar-w'] ?? 12;
+        $sbBg = $el['scrollbar-bg'] ?? 0x4A4A4A;
+        $sbThumb = $el['scrollbar-thumb'] ?? 0x888888;
+        $contentH = $el['content-height'] ?? 0;
+
+        // 绘制容器背景
+        $this->fillRect($x, $y, $w, $h, $bg);
+
+        // 计算滚动条thumb高度和位置
+        $scrollTop = $el['scroll-top'] ?? 0;
+        $thumbH = max(20, (int)($h * $h / max(1, $contentH)));
+        $maxScrollTop = max(0, $contentH - $h);
+        $trackH = $h - 4 - $thumbH; // scrollable track height
+        if ($maxScrollTop > 0) {
+            $thumbY = $y + 2 + (int)($scrollTop * $trackH / $maxScrollTop);
+        } else {
+            $thumbY = $y + 2;
+        }
+
+        // 绘制滚动条轨道
+        $sbX = $x + $w - $sbW;
+        $this->fillRect($sbX, $y + 2, $sbW - 2, $h - 4, $sbBg);
+
+        // 绘制滚动条thumb
+        $this->fillRect($sbX + 2, $thumbY, $sbW - 6, $thumbH, $sbThumb);
     }
 
     /**
@@ -150,10 +192,12 @@ class GdiRenderContext extends RenderContext
         }
 
         if ($displayText !== '') {
-            // Text alignment
+            // v6 M5 FIX: 精确测量文本宽度替代估算
             $textLen = strlen($displayText);
+            $measuredWidth = vue_measure_text_width($this->hdc, $displayText, $fontSize);
+            // fallback: 用估算值兜底
             $charWidth = (int)($fontSize * 0.6);
-            $textWidth = $textLen * $charWidth;
+            $textWidth = $measuredWidth > 0 ? $measuredWidth : $textLen * $charWidth;
             $textX = $x + 8; // Padding
             if ($align === 'right') {
                 $textX = $x + $w - 8 - $textWidth;
@@ -166,8 +210,13 @@ class GdiRenderContext extends RenderContext
         }
 
         // Draw cursor if focused
+        // v6 M5 FIX: 用实测宽度定位光标，而非估算宽度
         if (($el['cursor'] ?? false) && $text !== '') {
-            $cursorX = $x + 8 + $textLen * $charWidth;
+            $textLen = strlen($text);
+            $measuredWidth = vue_measure_text_width($this->hdc, $text, $fontSize);
+            $charWidth = (int)($fontSize * 0.6);
+            $textWidth = $measuredWidth > 0 ? $measuredWidth : $textLen * $charWidth;
+            $cursorX = $x + 8 + $textWidth;
             $cursorY = $y + (int)(($h - $fontSize) / 2);
             $cursorH = $fontSize;
             vue_fill_rect($this->hdc, $cursorX, $cursorY, 2, $cursorH, 0xFFFFFF);

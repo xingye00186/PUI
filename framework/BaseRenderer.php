@@ -14,20 +14,81 @@ class BaseRenderer
 {
     private ReactiveComponent $component;
     private RenderContext $ctx;
+    private array $componentMap = [];  // v6 M5: group_id -> component mapping
 
     public function __construct(ReactiveComponent $component, RenderContext $ctx)
     {
         $this->component = $component;
         $this->ctx = $ctx;
+        // v6 M5: Build component map from root's children for bind value lookup
+        $this->buildComponentMap($component);
+    }
+
+    /**
+     * v6 M5: 更新组件映射（在每次渲染前调用）
+     * 因为子组件是在运行时动态挂载的，需要在渲染前刷新映射
+     */
+    public function updateComponentMap(): void
+    {
+        $this->componentMap = [];
+        $this->buildComponentMap($this->component);
+    }
+
+    /**
+     * v6 M5: Build component map (group_id -> component)
+     * 支持大小写不敏感的匹配（组件ID可能是 DisplayPanel，但 group_id 是 display-panel）
+     */
+    private function buildComponentMap(ReactiveComponent $comp): void
+    {
+        $this->componentMap[strtolower($comp->getId())] = $comp;
+        foreach ($comp->getChildren() as $child) {
+            $this->componentMap[strtolower($child->getId())] = $child;
+            $this->buildComponentMap($child);
+        }
     }
 
     /**
      * 从组件属性获取绑定值
      * 用于在绘制前解析元素的 bind 字段
+     *
+     * v6 M5: 支持子组件绑定 - 如果元素有 group_id，从对应的子组件获取值
      */
-    protected function getBindValue(string $bindKey): string
+    protected function getBindValue(string $bindKey, string $groupId = ''): string
     {
+        // v6 M5: 如果有 group_id，从对应的子组件获取值（大小写不敏感）
+        if ($groupId !== '') {
+            $groupIdLower = strtolower($groupId);
+            if (isset($this->componentMap[$groupIdLower])) {
+                return $this->componentMap[$groupIdLower]->getBindValue($bindKey);
+            }
+        }
+        // 否则从根组件获取
         return $this->component->getBindValue($bindKey);
+    }
+
+    /**
+     * v6 M5: Get list item text from todoItems array
+     * Extracts text from the JSON array based on index
+     *
+     * @param string $bindKey e.g., "item_text_5" -> returns text of item at index 5
+     */
+    protected function getListItemText(string $bindKey): string
+    {
+        // Extract index from "item_text_N"
+        if (!preg_match('/^item_text_(\d+)$/', $bindKey, $m)) {
+            return '';
+        }
+        $index = (int)$m[1];
+
+        // Get todoItems from component
+        $todoItems = $this->component->getBindValue('todoItems');
+        $items = json_decode($todoItems, true) ?? [];
+
+        if ($index < 0 || $index >= count($items)) {
+            return '';  // Empty for non-existent items
+        }
+
+        return $items[$index]['text'] ?? '';
     }
 
     /**
@@ -47,6 +108,14 @@ class BaseRenderer
         // 获取预处理后的布局数据（统一 elements 数组）
         $elements = (array)($layout['elements'] ?? []);
 
+        // ====== v6 M5 FIX: 按 flex_index 排序 ======
+        // flex_index=-1 的背景矩形先渲染，flex_index=0 的内容后渲染
+        usort($elements, function($a, $b) {
+            $idxA = isset($a['flex_index']) ? (int)$a['flex_index'] : 0;
+            $idxB = isset($b['flex_index']) ? (int)$b['flex_index'] : 0;
+            return $idxA - $idxB; // 升序：-1 < 0
+        });
+
         // ====== Phase 1: 确定最高活跃层 ======
         $maxLayer = 0;
 
@@ -64,6 +133,9 @@ class BaseRenderer
         }
 
         // ====== Phase 2: 分层渲染，统一调用 drawElement ======
+        // v6 M5: Scroll context for offsetting list items inside scroll-container
+        $scrollCtx = null; // {x, y, w, h, scrollTop} or null
+
         for ($l = 0; $l <= $maxLayer; $l++) {
             for ($i = 0; $i < $elCount; $i++) {
                 $el = $elements[$i];
@@ -74,10 +146,52 @@ class BaseRenderer
                 if ($cond !== null && !is_array($cond)) continue;
                 if ($cond !== null && !$this->component->evalCondition($cond)) continue;
 
+                // ====== v6 M5: Track scroll-container context ======
+                $elType = $el['type'] ?? '';
+                if ($elType === 'scroll-container') {
+                    // Read scrollTop from binding
+                    $scrollTopVal = 0;
+                    $scrollTopBind = $el['scroll-top-bind'] ?? '';
+                    if ($scrollTopBind !== '') {
+                        $scrollTopStr = $this->getBindValue($scrollTopBind, $el['group_id'] ?? '');
+                        $scrollTopVal = (int)$scrollTopStr;
+                    }
+                    $scrollCtx = [
+                        'x' => $el['x'] ?? 0,
+                        'y' => $el['y'] ?? 0,
+                        'w' => $el['w'] ?? 0,
+                        'h' => $el['h'] ?? 0,
+                        'scrollTop' => $scrollTopVal,
+                    ];
+                    // Pass scrollTop to drawScrollContainer for thumb position
+                    $el['scroll-top'] = $scrollTopVal;
+                    // Render the scroll container background + scrollbar
+                    $this->ctx->drawElement($el);
+                    continue;
+                }
+
+                // ====== v6 M5: Apply scroll offset for children inside scroll-container ======
+                $isScrollChild = ($el['scroll-container'] ?? false);
+                if ($isScrollChild && $scrollCtx !== null) {
+                    $el['y'] = ($el['y'] ?? 0) - $scrollCtx['scrollTop'];
+                    $elH = $el['h'] ?? 0;
+                    // Skip if element is completely outside the scroll container's visible area
+                    if ($el['y'] + $elH <= $scrollCtx['y'] || $el['y'] >= $scrollCtx['y'] + $scrollCtx['h']) {
+                        continue;
+                    }
+                }
+
                 // 预处理：解析绑定值并添加到 el['text']（AOT 安全写法）
+                // v6 M5: 使用 group_id 查找正确的组件获取绑定值
                 $bindKey = $el['bind'] ?? '';
+                $groupId = $el['group_id'] ?? '';
                 if ($bindKey !== '') {
-                    $el['text'] = $this->getBindValue($bindKey);
+                    // v6 M5: Handle list item bindings (item_text_N pattern)
+                    if (strpos($bindKey, 'item_text_') === 0) {
+                        $el['text'] = $this->getListItemText($bindKey);
+                    } else {
+                        $el['text'] = $this->getBindValue($bindKey, $groupId);
+                    }
                 }
 
                 // 字号自适应（长数字时缩小）

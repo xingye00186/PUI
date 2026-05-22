@@ -17,6 +17,7 @@ class WinMsg
     public const WM_LBUTTONDOWN = 0x0201;
     public const WM_RBUTTONDOWN = 0x0204;
     public const WM_MBUTTONDOWN = 0x0207;
+    public const WM_MOUSEWHEEL  = 0x020A;
     // 键盘消息
     public const WM_KEYDOWN = 0x0100;
     public const WM_KEYUP = 0x0101;
@@ -36,6 +37,9 @@ class WinMsg
     public const VK_RIGHT = 0x27;
     public const VK_DOWN = 0x28;
     public const VK_DELETE = 0x2E;
+    // ShowWindow commands
+    public const SW_SHOW = 1;
+    public const SW_HIDE = 0;
 }
 
 // ---- 窗口管理 ----
@@ -50,3 +54,4 @@ function vue_end_paint(int $hWnd, int $hdc): void {}
 function vue_fill_rect(int $hdc, int $x, int $y, int $w, int $h, int $rgb): void {}
 function vue_draw_text(int $hdc, int $x, int $y, string $text, int $fontSize, int $rgb, int $bold): void {}
 function vue_draw_button(int $hdc, int $x, int $y, int $w, int $h, int $bgColor, int $borderColor): void {}
+function vue_measure_text_width(int $hdc, string $text, int $fontSize): int {}

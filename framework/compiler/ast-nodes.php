@@ -51,6 +51,8 @@ class RectNode extends TemplateNode
     public int $w;
     public int $h;
     public string $class;
+    /** @deprecated v6: Use <btn> inside <grid> for clickable buttons */
+    public string $clickHandler = '';
 
     public function __construct(int $x, int $y, int $w, int $h, string $class, int $line = 0)
     {
@@ -272,6 +274,7 @@ class FlexNode extends TemplateNode
     public string $justify;     // main-axis alignment
     public string $align;      // cross-axis alignment
     public string $wrap;       // nowrap | wrap
+    public string $class = ''; // v6 M5: CSS class for styling
 
     /** @var TemplateNode[] */
     public array $children = [];
@@ -295,6 +298,72 @@ class FlexNode extends TemplateNode
         $this->justify = $justify;
         $this->align = $align;
         $this->wrap = $wrap;
+    }
+}
+
+/**
+ * v6 M5: List item node for v-for rendering
+ *
+ * Represents a dynamic list item that renders based on array data.
+ * Uses relative positioning within a list container.
+ *
+ * Syntax:
+ *   <list-item :items="todoItems" :item-height="50" class="item" @click="onItemClick" />
+ *
+ * The SFC compiler expands this at compile-time into static element instances
+ * based on the initial array data.
+ */
+class ListItemNode extends TemplateNode
+{
+    /** X position */
+    public int $x;
+
+    /** Y position */
+    public int $y;
+
+    /** Width */
+    public int $w;
+
+    /** Property name containing the array data */
+    public string $itemsExpr;
+
+    /** Height of each item in pixels */
+    public int $itemHeight;
+
+    /** CSS class for the item background */
+    public string $class;
+
+    /** Text bind key (for item text display) */
+    public string $textBind;
+
+    /** Click handler method name */
+    public string $clickHandler;
+
+    /** Click argument expression */
+    public string $clickArg;
+
+    public function __construct(
+        int $x,
+        int $y,
+        int $w,
+        string $itemsExpr,
+        int $itemHeight,
+        string $class,
+        string $textBind,
+        string $clickHandler,
+        string $clickArg,
+        int $line = 0
+    ) {
+        parent::__construct($line);
+        $this->x = $x;
+        $this->y = $y;
+        $this->w = $w;
+        $this->itemsExpr = $itemsExpr;
+        $this->itemHeight = $itemHeight;
+        $this->class = $class;
+        $this->textBind = $textBind;
+        $this->clickHandler = $clickHandler;
+        $this->clickArg = $clickArg;
     }
 }
 
@@ -341,5 +410,53 @@ class ComponentRefNode extends TemplateNode
         $this->props         = $props;
         $this->slotChildren  = $slotChildren;
         $this->selfClosing   = $selfClosing;
+    }
+}
+
+/**
+ * v6 M5: ScrollContainer node for scrollable list areas
+ *
+ * Represents a scrollable container that clips its children and provides scrollbar.
+ *
+ * Syntax:
+ *   <scroll-container x="10" y="50" w="380" h="400" :scroll-top="scrollTop">
+ *     <list-item ... />
+ *   </scroll-container>
+ *
+ * The SFC compiler measures total content height and marks the container
+ * for runtime scroll handling.
+ */
+class ScrollContainerNode extends TemplateNode
+{
+    public int $x;
+    public int $y;
+    public int $w;
+    public int $h;
+
+    /** Property name for scroll position binding */
+    public string $scrollTopBind;
+
+    /** Scrollable content height (computed at compile-time from children) */
+    public int $contentHeight;
+
+    /** Child nodes (list items, etc.) */
+    /** @var TemplateNode[] */
+    public array $children = [];
+
+    public function __construct(
+        int $x,
+        int $y,
+        int $w,
+        int $h,
+        string $scrollTopBind = '',
+        int $line = 0
+    ) {
+        parent::__construct($line);
+        $this->x = $x;
+        $this->y = $y;
+        $this->w = $w;
+        $this->h = $h;
+        $this->scrollTopBind = $scrollTopBind;
+        $this->contentHeight = 0;
     }
 }

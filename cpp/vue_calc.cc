@@ -46,11 +46,16 @@ Int php_vue_window_create(String title, Int width, Int height) {
     wc.lpszClassName = "VueCalcWindow";
     RegisterClass(&wc);
 
+    // v6 M5 FIX: Adjust window rect to get desired client area
+    DWORD dwStyle = WS_OVERLAPPEDWINDOW & ~WS_THICKFRAME & ~WS_MAXIMIZEBOX;
+    RECT wr = {0, 0, (LONG)width, (LONG)height};
+    AdjustWindowRect(&wr, dwStyle, FALSE);
+
     HWND hWnd = CreateWindowEx(
         0, "VueCalcWindow", title.data(),
-        WS_OVERLAPPEDWINDOW & ~WS_THICKFRAME & ~WS_MAXIMIZEBOX,
+        dwStyle,
         CW_USEDEFAULT, CW_USEDEFAULT,
-        (int)width, (int)height,
+        wr.right - wr.left, wr.bottom - wr.top,
         NULL, NULL, GetModuleHandle(NULL), NULL
     );
     return (Int)hWnd;
@@ -136,6 +141,20 @@ void php_vue_draw_text(Int hdc, Int x, Int y, String text, Int fontSize, Int rgb
     TextOutA((HDC)hdc, (int)x, (int)y, text.data(), (int)strlen(text.data()));
     SelectObject((HDC)hdc, oldFont);
     DeleteObject(hFont);
+}
+
+// v6 M5 FIX: 精确测量文本像素宽度 (用于光标定位)
+Int php_vue_measure_text_width(Int hdc, String text, Int fontSize) {
+    HFONT hFont = CreateFont((int)fontSize, 0, 0, 0,
+        FW_NORMAL, FALSE, FALSE, FALSE,
+        DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+        DEFAULT_QUALITY, DEFAULT_PITCH | FF_SWISS, "Segoe UI");
+    HFONT oldFont = (HFONT)SelectObject((HDC)hdc, hFont);
+    SIZE sz = {0, 0};
+    GetTextExtentPoint32A((HDC)hdc, text.data(), (int)strlen(text.data()), &sz);
+    SelectObject((HDC)hdc, oldFont);
+    DeleteObject(hFont);
+    return (Int)sz.cx;
 }
 
 // 绘制按钮(填充+边框)

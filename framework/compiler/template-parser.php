@@ -334,6 +334,14 @@ class TemplateParser
                 // v6 M4: Flex container support
                 return $this->parseFlex($tok);
 
+            case 'list-item':
+                // v6 M5: List item element (inside v-for)
+                return $this->parseListItem($tok);
+
+            case 'scroll-container':
+                // v6 M5: Scrollable container
+                return $this->parseScrollContainer($tok);
+
             default:
                 // v5 M2: Check component registry before reporting unknown
                 if ($this->componentRegistry !== null) {
@@ -361,6 +369,7 @@ class TemplateParser
         $h    = (int)($attrs['h'] ?? 0);
         $cls  = $attrs['class'] ?? '';
         $vIf  = $attrs['v-if'] ?? '';   // v4 M2.5
+        $click = $attrs['@click'] ?? ''; // v6 M5: clickable rect
 
         if ($w === 0 || $h === 0) {
             $this->error("<rect> has zero width or height", $tok->line);
@@ -371,6 +380,7 @@ class TemplateParser
 
         $node = new RectNode($x, $y, $w, $h, $cls, $tok->line);
         $node->vIf = $vIf;
+        $node->clickHandler = $click;
         return $node;
     }
 
@@ -558,6 +568,7 @@ class TemplateParser
         $wrap = $attrs['wrap'] ?? 'nowrap';
 
         $node = new FlexNode($x, $y, $w, $h, $direction, $gap, $justify, $align, $wrap, $openTok->line);
+        $node->class = $attrs['class'] ?? '';
 
         // CRITICAL: Must advance past the <flex> opening tag before parsing children
         $this->advance();
@@ -644,6 +655,118 @@ class TemplateParser
             $enterHandler,
             $tok->line
         );
+    }
+
+    /**
+     * v6 M5: Parse <list-item> element for v-for list rendering
+     *
+     * Syntax:
+     *   <list-item items="itemsExpr"
+     *              :item-height="40"
+     *              class="item"
+     *              :text-bind="item.text"
+     *              @click="onItemClick"
+     *              :click-arg="item.id" />
+     */
+    private function parseListItem(Token $tok): ListItemNode
+    {
+        $attrs = $this->parseAttrs($tok->content);
+        $this->advance();
+
+        // Support both "items" and ":items" syntax
+        $x = (int)($attrs['x'] ?? 10);
+        $y = (int)($attrs['y'] ?? 50);
+        $w = (int)($attrs['w'] ?? 380);
+        $itemsExpr = $attrs['items'] ?? $attrs[':items'] ?? '';
+        $itemHeight = (int)($attrs['item-height'] ?? $attrs[':item-height'] ?? 40);
+        $class = $attrs['class'] ?? 'list-item';
+        $textBind = $attrs['text-bind'] ?? $attrs[':text-bind'] ?? '';
+        $clickHandler = $attrs['@click'] ?? '';
+        $clickArg = $attrs['click-arg'] ?? $attrs[':click-arg'] ?? '';
+
+        if ($itemsExpr === '') {
+            $this->error('<list-item> missing required :items attribute', $tok->line);
+        }
+
+        return new ListItemNode(
+            $x, $y, $w,
+            $itemsExpr,
+            $itemHeight,
+            $class,
+            $textBind,
+            $clickHandler,
+            $clickArg,
+            $tok->line
+        );
+    }
+
+    /**
+     * v6 M5: Parse <scroll-container> element
+     *
+     * Syntax:
+     *   <scroll-container x="10" y="50" w="380" h="400" :scroll-top="scrollTop">
+     *     <list-item ... />
+     *   </scroll-container>
+     */
+    private function parseScrollContainer(Token $openTok): ScrollContainerNode
+    {
+        $attrs = $this->parseAttrs($openTok->content);
+        $this->advance(); // consume opening tag
+
+        $x = (int)($attrs['x'] ?? 0);
+        $y = (int)($attrs['y'] ?? 0);
+        $w = (int)($attrs['w'] ?? 0);
+        $h = (int)($attrs['h'] ?? 0);
+        $scrollTopBind = $attrs[':scroll-top'] ?? $attrs['scroll-top'] ?? '';
+
+        if ($w === 0 || $h === 0) {
+            $this->error("<scroll-container> has zero width or height", $openTok->line);
+        }
+
+        $node = new ScrollContainerNode($x, $y, $w, $h, $scrollTopBind, $openTok->line);
+
+        // Parse children until </scroll-container>
+        while (true) {
+            $tok = $this->current();
+
+            if ($tok->type === TOK_EOF) {
+                $this->error('Unclosed <scroll-container> (missing </scroll-container>)', $openTok->line);
+                break;
+            }
+
+            if ($tok->type === TOK_TAG_CLOSE) {
+                $closeName = $this->getTagName($tok->content);
+                if ($closeName === 'scroll-container') {
+                    $this->advance(); // consume </scroll-container>
+                    break;
+                }
+                $this->error("Unexpected closing tag </$closeName> inside <scroll-container>", $tok->line);
+                $this->advance();
+                continue;
+            }
+
+            if ($tok->type === TOK_TAG_OPEN || $tok->type === TOK_TAG_SELF) {
+                $child = $this->parseElement();
+                if ($child !== null) {
+                    $node->children[] = $child;
+                }
+                continue;
+            }
+
+            // Skip comments, text, etc.
+            $this->advance();
+        }
+
+        // Calculate total content height from children
+        $contentHeight = 0;
+        foreach ($node->children as $child) {
+            if ($child instanceof ListItemNode) {
+                $contentHeight += $child->itemHeight;
+            }
+        }
+        $node->contentHeight = $contentHeight;
+
+        return $node;
     }
 
     private function parseBtn(Token $tok): BtnNode
@@ -750,28 +873,68 @@ class TemplateParser
         $elements = [];
         $buttons  = [];
         $bindKeys = [];    // v4 M2.2: collect unique :bind keys for getBindValue generation
+        $textBindKeys = []; // v6 M5: collect :bind values from <text> elements for getBindValue
         $handlerMap = [];  // v4 M2.3: handler => hasArg, for auto dispatchClick generation
         $condProps = [];   // v4 M2.5: collect property names from v-if conditions for evalCondition generation
 
         foreach ($app->children as $child) {
             if ($child instanceof RectNode) {
                 $style = $classStyles[$child->class] ?? [];
-                $el = [
-                    'type'  => 'rect',
-                    'x'     => $child->x,
-                    'y'     => $child->y,
-                    'w'     => $child->w,
-                    'h'     => $child->h,
-                    'color' => $style['bg'] ?? 0,
-                    'layer' => $child->layer,
-                    'group_id' => $child->groupId,
-                ];
-                // v4 M2.5: v-if condition
-                if ($child->vIf !== '') {
-                    $el['condition'] = $this->parseVIfCondition($child->vIf);
-                    $condProps[$el['condition']['prop']] = true;
+
+                // v6 M5: Clickable rect -> convert to button
+                if ($child->clickHandler !== '') {
+                    $bg = $style['bg'] ?? 0x4488CC;
+                    $fg = $style['fg'] ?? 0xFFFFFF;
+                    $border = $this->calcBorderColor($bg);
+
+                    // Parse handler with optional argument
+                    $handler = $child->clickHandler;
+                    $arg = null;
+                    if (preg_match("/^(\w+)\(['\"]([^'\"]*)['\"]\)$/", $child->clickHandler, $m)) {
+                        $handler = $m[1];
+                        $arg = $m[2];
+                    }
+
+                    $buttons[] = [
+                        'label'  => '',
+                        'x'      => $child->x,
+                        'y'      => $child->y,
+                        'w'      => $child->w,
+                        'h'      => $child->h,
+                        'bg'     => $bg,
+                        'fg'     => $fg,
+                        'border' => $border,
+                        'handler' => $handler,
+                        'arg'    => $arg,
+                        'layer'  => $child->layer,
+                        'group_id' => $child->groupId,
+                    ];
+
+                    // Collect handler
+                    if (!isset($handlerMap[$handler])) {
+                        $handlerMap[$handler] = ($arg !== null);
+                    } elseif ($arg !== null) {
+                        $handlerMap[$handler] = true;
+                    }
+                } else {
+                    $el = [
+                        'type'  => 'rect',
+                        'x'     => $child->x,
+                        'y'     => $child->y,
+                        'w'     => $child->w,
+                        'h'     => $child->h,
+                        'color' => $style['bg'] ?? 0,
+                        'layer' => $child->layer,
+                        'group_id' => $child->groupId,
+                        'flex_index' => -1,  // v6 M5: background rects render first
+                    ];
+                    // v4 M2.5: v-if condition
+                    if ($child->vIf !== '') {
+                        $el['condition'] = $this->parseVIfCondition($child->vIf);
+                        $condProps[$el['condition']['prop']] = true;
+                    }
+                    $elements[] = $el;
                 }
-                $elements[] = $el;
             } elseif ($child instanceof TextNode) {
                 $style = $classStyles[$child->class] ?? [];
                 $el = [
@@ -785,6 +948,7 @@ class TemplateParser
                     'bold'     => $style['bold'] ?? 0,
                     'layer'    => $child->layer,
                     'group_id' => $child->groupId,
+                    'flex_index' => 0,  // v6 M5: text renders after backgrounds
                 ];
                 if ($child->hasContainer) {
                     $el['containerW'] = $child->containerW;
@@ -796,9 +960,10 @@ class TemplateParser
                     $condProps[$el['condition']['prop']] = true;
                 }
                 $elements[] = $el;
-                // Collect unique bind keys
+                // v6 M5: Collect :bind values from <text> elements for getBindValue
                 if ($child->bind !== '') {
                     $bindKeys[$child->bind] = true;
+                    $textBindKeys[$child->bind] = true;
                 }
             } elseif ($child instanceof GridNode) {
                 // Grid's buttons are computed at compile-time
@@ -879,7 +1044,7 @@ class TemplateParser
                 }
             } elseif ($child instanceof FlexNode) {
                 // v6 M4: Flex container — layout children and expand into elements
-                $flexElements = $this->expandFlexNode($child, $classStyles);
+                $flexElements = $this->expandFlexNode($child, $classStyles, $textBindKeys);
                 foreach ($flexElements as $el) {
                     $elements[] = $el;
                 }
@@ -892,6 +1057,7 @@ class TemplateParser
                 $elements[] = [
                     'type'     => 'textbox',
                     'bind'     => $child->vModel,
+                    'placeholder' => $child->placeholder,  // v6 M5: pass placeholder
                     'x'        => $child->x,
                     'y'        => $child->y,
                     'w'        => $child->w,
@@ -903,6 +1069,7 @@ class TemplateParser
                     'cursor'   => true,
                     'layer'    => $child->layer,
                     'group_id' => $child->groupId,
+                    'flex_index' => 0,  // v6 M5: textbox renders after backgrounds
                 ];
                 // Collect keyboard event handlers
                 if ($child->keyHandler !== '') {
@@ -910,6 +1077,111 @@ class TemplateParser
                 }
                 if ($child->enterHandler !== '') {
                     $handlerMap[$child->enterHandler] = true;
+                }
+            } elseif ($child instanceof ListItemNode) {
+                // v6 M5: List item — expand into multiple list item elements based on items data
+                // v6 M5 FIX: Add :items expression as bindKey for getBindValue (e.g. "todoItems")
+                if ($child->itemsExpr !== '') {
+                    $bindKeys[$child->itemsExpr] = true;
+                }
+                $listElements = $this->expandListItemNode($child, $classStyles, $bindKeys, $handlerMap, $condProps);
+                foreach ($listElements['elements'] as $el) {
+                    $elements[] = $el;
+                }
+                foreach ($listElements['buttons'] as $btn) {
+                    $buttons[] = $btn;
+                }
+                // Merge collected bindKeys and handlers back
+                foreach ($listElements['collectedBindKeys'] as $key) {
+                    $bindKeys[$key] = true;
+                }
+                foreach ($listElements['collectedHandlers'] as $handler => $hasArg) {
+                    if (!isset($handlerMap[$handler])) {
+                        $handlerMap[$handler] = $hasArg;
+                    } elseif ($hasArg) {
+                        $handlerMap[$handler] = true;
+                    }
+                }
+                foreach ($listElements['collectedCondProps'] as $prop) {
+                    $condProps[$prop] = true;
+                }
+            } elseif ($child instanceof ScrollContainerNode) {
+                // v6 M5: ScrollContainer — draw container rect + scrollbar, process children
+                $style = $classStyles['scroll-container'] ?? [];
+                $containerBg = $style['bg'] ?? 0x2D2D2D;
+                $scrollbarW = 12;
+                $scrollbarBg = $style['scrollbar-bg'] ?? 0x4A4A4A;
+                $scrollbarThumb = $style['scrollbar-thumb'] ?? 0x888888;
+
+                // v6 M5 FIX: Calculate actual content height from expanded children FIRST
+                $actualContentHeight = 0;
+                $scrollChildrenElements = [];
+                $scrollChildrenButtons = [];
+
+                foreach ($child->children as $listChild) {
+                    if ($listChild instanceof ListItemNode) {
+                        // v6 M5 FIX: Add :items expression as bindKey for getBindValue
+                        if ($listChild->itemsExpr !== '') {
+                            $bindKeys[$listChild->itemsExpr] = true;
+                        }
+                        $listElements = $this->expandListItemNode($listChild, $classStyles, $bindKeys, $handlerMap, $condProps);
+                        // Use maxItems * itemHeight for correct content height
+                        $actualContentHeight = $listElements['maxItems'] * $listChild->itemHeight;
+
+                        foreach ($listElements['elements'] as $el) {
+                            $el['scroll-container'] = true; // Mark as scrollable
+                            $scrollChildrenElements[] = $el;
+                        }
+                        foreach ($listElements['buttons'] as $btn) {
+                            $btn['scroll-container'] = true;
+                            $scrollChildrenButtons[] = $btn;
+                        }
+                        // v6 M5 FIX: Merge collected bindKeys from list expansion
+                        foreach ($listElements['collectedBindKeys'] as $key) {
+                            $bindKeys[$key] = true;
+                        }
+                        // v6 M5 FIX: Merge collected handlers (was missing, caused deleteItem dispatchClick not generated)
+                        foreach ($listElements['collectedHandlers'] as $handler => $hasArg) {
+                            if (!isset($handlerMap[$handler])) {
+                                $handlerMap[$handler] = $hasArg;
+                            } elseif ($hasArg) {
+                                $handlerMap[$handler] = true;
+                            }
+                        }
+                        foreach ($listElements['collectedCondProps'] as $prop) {
+                            $condProps[$prop] = true;
+                        }
+                    }
+                }
+
+                // Container rect with CORRECT content-height
+                $elements[] = [
+                    'type' => 'scroll-container',
+                    'x' => $child->x,
+                    'y' => $child->y,
+                    'w' => $child->w,
+                    'h' => $child->h,
+                    'bg' => $containerBg,
+                    'scrollbar-w' => $scrollbarW,
+                    'scrollbar-bg' => $scrollbarBg,
+                    'scrollbar-thumb' => $scrollbarThumb,
+                    'scroll-top-bind' => $child->scrollTopBind,
+                    'content-height' => $actualContentHeight > 0 ? $actualContentHeight : $child->contentHeight,
+                    'layer' => $child->layer,
+                    'group_id' => $child->groupId,
+                ];
+
+                // Collect scroll-top bind
+                if ($child->scrollTopBind !== '') {
+                    $bindKeys[$child->scrollTopBind] = true;
+                }
+
+                // Append expanded children elements and buttons
+                foreach ($scrollChildrenElements as $el) {
+                    $elements[] = $el;
+                }
+                foreach ($scrollChildrenButtons as $btn) {
+                    $buttons[] = $btn;
                 }
             }
         }
@@ -920,6 +1192,7 @@ class TemplateParser
             'bindKeys'    => array_keys($bindKeys),     // v4 M2.2: for auto getBindValue generation
             'handlerMap'  => $handlerMap,               // v4 M2.3: for auto dispatchClick generation
             'condProps'   => array_keys($condProps),    // v4 M2.5: for auto evalCondition generation
+            'textBindKeys' => array_keys($textBindKeys), // v6 M5: :bind values from <text> elements
         ];
     }
 
@@ -1127,9 +1400,18 @@ class TemplateParser
      * v6 M4: Expand FlexNode into flat elements array
      *
      * Uses FlexLayout engine to compute child positions at compile time.
+     *
+     * @param array &$textBindKeys OUT: collects :bind values from TextNode children
      */
-    private function expandFlexNode(FlexNode $flex, array $classStyles): array
+    private function expandFlexNode(FlexNode $flex, array $classStyles, array &$textBindKeys): array
     {
+        // v6 M5: Collect :bind values from FlexNode's TextNode children
+        foreach ($flex->children as $child) {
+            if ($child instanceof TextNode && $child->bind !== '') {
+                $textBindKeys[$child->bind] = true;
+            }
+        }
+
         // Collect child dimensions for flex calculation
         $children = [];
         foreach ($flex->children as $child) {
@@ -1154,6 +1436,23 @@ class TemplateParser
 
         // Build flat elements array with computed positions
         $elements = [];
+
+        // v6 M5 FIX: Add flex container background rect
+        $flexStyle = $classStyles[$flex->class] ?? [];
+        if (isset($flexStyle['bg'])) {
+            $elements[] = [
+                'type'  => 'rect',
+                'x'     => $flex->x,
+                'y'     => $flex->y,
+                'w'     => $flex->w,
+                'h'     => $flex->h,
+                'color' => $flexStyle['bg'],
+                'layer' => 0,
+                'group_id' => 'app',
+                'flex_index' => -1,  // background, no flex layout
+            ];
+        }
+
         for ($i = 0; $i < count($flex->children); $i++) {
             $child = $flex->children[$i];
             $pos = $positions[$i];
@@ -1265,6 +1564,147 @@ class TemplateParser
             ];
         }
         return null;
+    }
+
+    // ============================================================
+    // v6 M5: List item expansion
+    // ============================================================
+
+    /**
+     * v6 M5: Expand a ListItemNode into multiple list item elements based on items data.
+     *
+     * For compile-time expansion, we generate elements for a fixed number of list items
+     * and use runtime data binding for the actual content.
+     *
+     * @param ListItemNode $listItem
+     * @param array $classStyles
+     * @param array &$bindKeys (modified in place)
+     * @param array &$handlerMap (modified in place)
+     * @param array &$condProps (modified in place)
+     * @return array
+     */
+    private function expandListItemNode(
+        ListItemNode $listItem,
+        array $classStyles,
+        array &$bindKeys,
+        array &$handlerMap,
+        array &$condProps
+    ): array {
+        $elements = [];
+        $buttons = [];
+        $collectedBindKeys = [];
+        $collectedHandlers = [];
+        $collectedCondProps = [];
+
+        $style = $classStyles[$listItem->class] ?? [];
+        $bg = $style['bg'] ?? 0x3E3E3E;
+        $fg = $style['fg'] ?? 0xDDDDDD;
+        $fontSize = $style['fontSize'] ?? 14;
+        $borderColor = $style['border'] ?? $this->calcBorderColor($bg);
+
+        // Static expansion: generate 20 list item slots (max visible items)
+        $maxItems = 20;
+        $containerX = $listItem->x;
+        $containerY = $listItem->y;
+        $containerW = $listItem->w > 0 ? $listItem->w : ($style['width'] ?? 380);
+        $itemHeight = $listItem->itemHeight;
+
+        // Collect text bind expression for dynamic content
+        $textBind = $listItem->textBind;
+        if ($textBind !== '') {
+            // Extract the property part from binding like "item.text" -> "item_text_0", "item_text_1", etc.
+            $bindVar = preg_replace('/[^a-zA-Z0-9_]/', '_', $textBind);
+            for ($i = 0; $i < $maxItems; $i++) {
+                $bindKey = "{$bindVar}_{$i}";
+                $collectedBindKeys[$bindKey] = true;
+            }
+        }
+
+        // Collect click handler
+        $clickHandler = $listItem->clickHandler;
+        if ($clickHandler !== '') {
+            $collectedHandlers[$clickHandler] = true; // click-arg is optional
+        }
+
+        // Generate static list item elements
+        for ($i = 0; $i < $maxItems; $i++) {
+            $itemY = $containerY + $i * $itemHeight;
+
+            // Background rect for list item
+            $elements[] = [
+                'type' => 'rect',
+                'x' => $containerX,
+                'y' => $itemY,
+                'w' => $containerW,
+                'h' => $itemHeight - 2, // gap between items
+                'color' => $bg,
+                'layer' => $listItem->layer,
+                'group_id' => $listItem->groupId,
+                'list_index' => $i,  // v6 M5: for runtime item binding
+            ];
+
+            // Text element for list item text
+            if ($textBind !== '') {
+                $bindKey = "{$bindVar}_{$i}";
+                $elements[] = [
+                    'type' => 'text',
+                    'bind' => $bindKey,
+                    'x' => $containerX + 10,
+                    'y' => $itemY + ($itemHeight - $fontSize) / 2,
+                    'w' => $containerW - 60, // leave space for delete button
+                    'h' => $fontSize + 4,
+                    'align' => 'left',
+                    'fontSize' => $fontSize,
+                    'color' => $fg,
+                    'bold' => 0,
+                    'layer' => $listItem->layer,
+                    'group_id' => $listItem->groupId,
+                    'list_index' => $i,
+                ];
+            }
+
+            // Delete button for each list item
+            $btnX = $containerX + $containerW - 50;
+            $btnY = $itemY + 4;
+            $btnW = 40;
+            $btnH = $itemHeight - 8;
+            $buttons[] = [
+                'label' => 'X',
+                'x' => $btnX,
+                'y' => $btnY,
+                'w' => $btnW,
+                'h' => $btnH,
+                'bg' => 0xCC3333,
+                'fg' => 0xFFFFFF,
+                'border' => $this->calcBorderColor(0xCC3333),
+                'handler' => $clickHandler,
+                'arg' => (string)$i,  // Pass index for runtime lookup
+                'layer' => $listItem->layer,
+                'group_id' => $listItem->groupId,
+                'list_index' => $i,  // v6 M5: for runtime item lookup
+            ];
+        }
+
+        return [
+            'elements' => $elements,
+            'buttons' => $buttons,
+            'collectedBindKeys' => array_keys($collectedBindKeys),
+            'collectedHandlers' => $collectedHandlers,
+            'collectedCondProps' => array_keys($collectedCondProps),
+            'maxItems' => $maxItems,
+            'bindVar' => $bindVar ?? '',
+        ];
+    }
+
+    /**
+     * Calculate border color based on background color (inlined CssMappings::borderColor logic)
+     */
+    private function calcBorderColor(int $bg): int
+    {
+        $r = min(255, (($bg >> 16) & 0xFF) + 20);
+        $g = min(255, (($bg >> 8) & 0xFF) + 20);
+        $b = min(255, ($bg & 0xFF) + 20);
+        return ($r << 16) | ($g << 8) | $b;
     }
 
     private function expandForNode(ForNode $forNode, array $classStyles): array

@@ -39,9 +39,9 @@ class ScriptAnalyzer
         if (preg_match('/^class\s+\w+\s+extends\s+\w+\s*\{(.*)\}\s*$/s', $script, $m)) {
             $classBody = $m[1];
         } else {
-            // Fallback: if pattern doesn't match, return original script
-            // (might be just method definitions without class wrapper)
-            return $script;
+            // v6 M5 FIX: No outer class declaration — treat entire script as class body
+            // (For SFC format where <script> content directly contains properties/methods)
+            $classBody = $script;
         }
 
         // Step 1: Extract property names from declarations

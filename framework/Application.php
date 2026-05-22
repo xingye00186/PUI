@@ -68,9 +68,10 @@ class Application
      * @param string $type 组件类名
      * @param array $props 组件属性（包含偏移）
      * @param ComponentInterface $parent 父组件引用
+     * @param array $bindProps 动态绑定的 props（如 :value="display"）
      * @return ComponentInterface
      */
-    private function mountComponent(string $key, string $type, array $props, ComponentInterface $parent): ComponentInterface
+    private function mountComponent(string $key, string $type, array $props, ComponentInterface $parent, array $bindProps = []): ComponentInterface
     {
         // 优先从缓存池取出
         if (isset($this->componentPool[$key])) {
@@ -88,6 +89,18 @@ class Application
         // 设置父子关系
         if (method_exists($comp, 'setParent')) {
             $comp->setParent($parent);
+        }
+        // v6 M5: 添加到父组件的 children 列表（用于 BaseRenderer.buildComponentMap）
+        if (method_exists($parent, 'addChild')) {
+            $parent->addChild($comp, []);
+        }
+
+        // v6 M5: 设置动态属性绑定 (如 :value="display" → component.value = root.display)
+        foreach ($bindProps as $propName => $bindKey) {
+            if (method_exists($comp, 'setBindValue') && $this->rootComponent !== null) {
+                $value = $this->rootComponent->getBindValue($bindKey);
+                $comp->setBindValue($propName, $value);
+            }
         }
 
         return $comp;
@@ -195,6 +208,7 @@ class Application
             $key = $vifEl['key'] ?? '';
             $props = (array)($vifEl['props'] ?? []);
             $vIf = $vifEl['vIf'] ?? null;
+            $bindProps = (array)($vifEl['bindProps'] ?? []);  // v6 M5: 动态绑定 props
 
             if ($type === '' || $key === '') continue;
 
@@ -209,7 +223,7 @@ class Application
             if ($conditionMet && !$wasActive) {
                 // 条件从 false 变为 true: 挂载组件
                 $props['_poolKey'] = $key;
-                $childComp = $this->mountComponent($key, $type, $props, $comp);
+                $childComp = $this->mountComponent($key, $type, $props, $comp, $bindProps);
                 $childOffsetX = $props['x'] ?? 0;
                 $childOffsetY = $props['y'] ?? 0;
                 $this->collectLayoutRecursive(
@@ -219,9 +233,16 @@ class Application
                     $elements
                 );
             } elseif ($conditionMet && $wasActive) {
-                // 条件始终为 true: 收集已挂载的组件布局
+                // 条件始终为 true: 同步绑定值 + 收集已挂载的组件布局
                 $childComp = $this->activeComponents[$key] ?? null;
                 if ($childComp !== null) {
+                    // v6 M5: 同步动态绑定 props（父组件值变化时更新）
+                    foreach ($bindProps as $propName => $bindKey) {
+                        if (method_exists($childComp, 'setBindValue') && $this->rootComponent !== null) {
+                            $value = $this->rootComponent->getBindValue($bindKey);
+                            $childComp->setBindValue($propName, $value);
+                        }
+                    }
                     $childOffsetX = $props['x'] ?? 0;
                     $childOffsetY = $props['y'] ?? 0;
                     $this->collectLayoutRecursive(
@@ -251,6 +272,8 @@ class Application
     {
         $running = true;
 
+        // v6 M5: 更新组件映射（确保子组件已挂载）
+        $this->renderer->updateComponentMap();
         // v6 M2: 传递预处理后的布局数据给渲染器
         $this->renderer->render($this->getActiveLayout());
 
@@ -274,6 +297,18 @@ class Application
                     } catch (\Throwable $e) {
                         echo "ERROR in handleClick: " . $e->getMessage() . "\n";
                         echo $e->getTraceAsString() . "\n";
+                    }
+                }
+
+                // v6 M5: 鼠标滚轮事件 — 滚动容器
+                if ($msgType == WinMsg::WM_MOUSEWHEEL) {
+                    $wParam = $msg[2] ?? 0;
+                    $delta = (int)(($wParam >> 16) & 0xFFFF);
+                    if ($delta >= 32768) $delta -= 65536; // signed int16
+                    try {
+                        $this->handleScroll($delta);
+                    } catch (\Throwable $e) {
+                        echo "ERROR in handleScroll: " . $e->getMessage() . "\n";
                     }
                 }
 
@@ -303,6 +338,8 @@ class Application
             // 数据驱动渲染: 仅在组件状态变更后重绘
             if ($this->rootComponent !== null && $this->rootComponent->dirty) {
                 try {
+                    // v6 M5: 更新组件映射（确保获取最新的子组件绑定值）
+                    $this->renderer->updateComponentMap();
                     // v6 M2: 传递预处理后的布局数据
                     $this->renderer->render($this->getActiveLayout());
                 } catch (\Throwable $e) {
@@ -326,13 +363,39 @@ class Application
         $layout = $this->getActiveLayout();
         $elements = (array)($layout['elements'] ?? []);
 
-        // 收集所有按钮元素
-        $buttons = [];
+        // v6 M5: First pass — find scroll-container to determine scroll offset
+        $scrollTop = 0;
+        $scrollCtx = null; // {x, y, w, h}
         $elCount = count($elements);
         for ($i = 0; $i < $elCount; $i++) {
             $el = $elements[$i];
             if (!is_array($el)) continue;
+            if (($el['type'] ?? '') === 'scroll-container') {
+                $scrollCtx = [
+                    'x' => $el['x'] ?? 0,
+                    'y' => $el['y'] ?? 0,
+                    'w' => $el['w'] ?? 0,
+                    'h' => $el['h'] ?? 0,
+                ];
+                $scrollTopBind = $el['scroll-top-bind'] ?? '';
+                if ($scrollTopBind !== '' && $this->rootComponent !== null) {
+                    $scrollTopStr = $this->rootComponent->getBindValue($scrollTopBind);
+                    $scrollTop = (int)$scrollTopStr;
+                }
+                break; // only one scroll-container
+            }
+        }
+
+        // 收集所有按钮元素
+        $buttons = [];
+        for ($i = 0; $i < $elCount; $i++) {
+            $el = $elements[$i];
+            if (!is_array($el)) continue;
             if (($el['type'] ?? '') === 'button') {
+                // v6 M5: Apply scroll offset for buttons inside scroll-container
+                if (($el['scroll-container'] ?? false) && $scrollCtx !== null) {
+                    $el['y'] = ($el['y'] ?? 0) - $scrollTop;
+                }
                 $buttons[] = $el;
             }
         }
@@ -378,6 +441,52 @@ class Application
     }
 
     /**
+     * v6 M5: 处理鼠标滚轮滚动
+     * @param int $delta 滚轮增量 (正=向上, 负=向下)
+     */
+    private function handleScroll(int $delta): void
+    {
+        if ($this->rootComponent === null) return;
+
+        $layout = $this->getActiveLayout();
+        $elements = (array)($layout['elements'] ?? []);
+
+        // Find scroll-container element
+        $scrollEl = null;
+        $elCount = count($elements);
+        for ($i = 0; $i < $elCount; $i++) {
+            $el = $elements[$i];
+            if (!is_array($el)) continue;
+            if (($el['type'] ?? '') === 'scroll-container') {
+                $scrollEl = $el;
+                break;
+            }
+        }
+
+        if ($scrollEl === null) return;
+
+        $containerH = $scrollEl['h'] ?? 0;
+        $contentH = $scrollEl['content-height'] ?? 0;
+        $maxScrollTop = max(0, $contentH - $containerH);
+
+        if ($maxScrollTop <= 0) return; // Content fits, no scrolling needed
+
+        // WHEEL_DELTA = 120, each notch scrolls ~40px
+        $scrollAmount = (int)($delta / 120) * 40;
+        $scrollTopBind = $scrollEl['scroll-top-bind'] ?? '';
+        if ($scrollTopBind === '') return;
+
+        $currentScrollTop = (int)$this->rootComponent->getBindValue($scrollTopBind);
+        $newScrollTop = $currentScrollTop - $scrollAmount; // delta>0 scrolls up
+        $newScrollTop = max(0, min($newScrollTop, $maxScrollTop));
+
+        if ($newScrollTop !== $currentScrollTop) {
+            $this->rootComponent->setBindValue($scrollTopBind, (string)$newScrollTop);
+            $this->rootComponent->dirty = true;
+        }
+    }
+
+    /**
      * 分发按钮点击到根组件
      */
     private function dispatchClick(array $btn): void
@@ -406,6 +515,23 @@ class Application
         $el = $this->focusedTextBox;
         $bindKey = $el['bind'] ?? '';
         if ($bindKey === '') return;
+
+        // v6 M5: Tab 键导航支持 (Shift+Tab = 0x0F, Tab = 0x09)
+        if ($msgType === WinMsg::WM_KEYDOWN && ($wParam === 0x09 || $wParam === 0x0F)) {
+            // Tab 或 Shift+Tab - 移动焦点到下一个/上一个元素
+            // 简单实现: 如果是 Shift+Tab 或 Tab，直接处理
+            // 完整实现需要 FocusManager
+            if ($wParam === 0x09) {
+                // Tab: 下一个 - 在列表应用中移动到下一个删除按钮
+            } else {
+                // Shift+Tab: 上一个
+            }
+            // 更新渲染以显示焦点变化
+            if ($this->rootComponent !== null) {
+                $this->rootComponent->dirty = true;
+            }
+            return;
+        }
 
         if ($msgType === WinMsg::WM_CHAR) {
             // 可打印字符输入

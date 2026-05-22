@@ -1,5 +1,7 @@
 <?php
 
+use native_types;
+
 /**
  * VueCalc v6 M4 — Test Application Entry Point
  *
@@ -14,6 +16,9 @@
 function main(): int
 {
     date_default_timezone_set('Asia/Shanghai');
+
+    // Windows ShowWindow command
+    $showCmd = 1;
 
     echo "========================================\n";
     echo "  VueCalc v6 M4 — Flex/TextBox Test App\n";
@@ -38,7 +43,7 @@ function main(): int
 
     echo "Window initialized (Flex/TextBox/v-model Test)\n";
 
-    vue_window_show($hWnd, SW_SHOW);
+    vue_window_show($hWnd, $showCmd);
 
     // 3. 创建渲染上下文（持有 hWnd）
     $ctx = new GdiRenderContext($hWnd);

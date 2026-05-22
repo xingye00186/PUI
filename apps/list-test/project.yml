@@ -1,0 +1,17 @@
+name: list_test
+version: 1.0.0
+mode: bin
+no-console: false
+sources:
+  - main.php
+  - ./gen
+  - ../../framework/Application.php
+  - ../../framework/interfaces/ComponentInterface.php
+  - ../../framework/BaseComponent.php
+  - ../../framework/ReactiveComponent.php
+  - ../../framework/ChangeQueue.php
+  - ../../framework/BaseRenderer.php
+  - ../../framework/rendering/RenderContext.php
+  - ../../framework/rendering/GdiRenderContext.php
+  - ../../stub
+  - ../../cpp
