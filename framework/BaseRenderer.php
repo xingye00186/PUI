@@ -156,12 +156,38 @@ class BaseRenderer
                         $scrollTopStr = $this->getBindValue($scrollTopBind, $el['group_id'] ?? '');
                         $scrollTopVal = (int)$scrollTopStr;
                     }
+
+                    // v6 M6: Dynamic content-height from actual items count
+                    $itemsBind = $el['items-bind'] ?? '';
+                    $itemHeight = $el['item-height'] ?? 50;
+                    $actualCount = 0;
+                    $contentHeight = $el['content-height'] ?? 0;
+
+                    if ($itemsBind !== '') {
+                        $itemsJson = $this->getBindValue($itemsBind, $el['group_id'] ?? '');
+                        $items = json_decode($itemsJson, true) ?? [];
+                        $actualCount = count($items);
+                        $contentHeight = max($itemHeight, $actualCount * $itemHeight);
+                        $el['content-height'] = $contentHeight;
+                    }
+
+                    // Clamp scrollTop to valid range
+                    $containerH = $el['h'] ?? 0;
+                    $maxScrollTop = max(0, $contentHeight - $containerH);
+                    if ($scrollTopVal > $maxScrollTop) {
+                        $scrollTopVal = $maxScrollTop;
+                    }
+                    if ($scrollTopVal < 0) {
+                        $scrollTopVal = 0;
+                    }
+
                     $scrollCtx = [
                         'x' => $el['x'] ?? 0,
                         'y' => $el['y'] ?? 0,
                         'w' => $el['w'] ?? 0,
-                        'h' => $el['h'] ?? 0,
+                        'h' => $containerH,
                         'scrollTop' => $scrollTopVal,
+                        'actualCount' => $actualCount,
                     ];
                     // Pass scrollTop to drawScrollContainer for thumb position
                     $el['scroll-top'] = $scrollTopVal;
@@ -173,7 +199,21 @@ class BaseRenderer
                 // ====== v6 M5: Apply scroll offset for children inside scroll-container ======
                 $isScrollChild = ($el['scroll-container'] ?? false);
                 if ($isScrollChild && $scrollCtx !== null) {
-                    $el['y'] = ($el['y'] ?? 0) - $scrollCtx['scrollTop'];
+                    // v6 M8 FIX: Dynamic slot-to-item mapping for scrolling
+                    // When scrolled, slot N shows item (N - baseIndex)
+                    $scrollTopVal = $scrollCtx['scrollTop'] ?? 0;
+                    $itemHeight = $el['item-height'] ?? 50;
+                    $baseIndex = (int)($scrollTopVal / $itemHeight);
+                    $listIndex = $el['list_index'] ?? -1;
+                    $actualItemIndex = $listIndex - $baseIndex;
+                    $actualCount = $scrollCtx['actualCount'] ?? 0;
+                    
+                    // Check if this item index is within valid range
+                    if ($actualItemIndex < 0 || $actualItemIndex >= $actualCount) {
+                        continue;
+                    }
+                    
+                    $el['y'] = ($el['y'] ?? 0) - $scrollTopVal;
                     $elH = $el['h'] ?? 0;
                     // Skip if element is completely outside the scroll container's visible area
                     if ($el['y'] + $elH <= $scrollCtx['y'] || $el['y'] >= $scrollCtx['y'] + $scrollCtx['h']) {

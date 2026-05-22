@@ -1117,9 +1117,15 @@ class TemplateParser
                 $actualContentHeight = 0;
                 $scrollChildrenElements = [];
                 $scrollChildrenButtons = [];
+                // v6 M6: Capture items-bind and item-height for runtime dynamic sizing
+                $capturedItemsBind = '';
+                $capturedItemHeight = 50;
 
                 foreach ($child->children as $listChild) {
                     if ($listChild instanceof ListItemNode) {
+                        // v6 M6: Capture for runtime dynamic content-height
+                        $capturedItemsBind = $listChild->itemsExpr;
+                        $capturedItemHeight = $listChild->itemHeight;
                         // v6 M5 FIX: Add :items expression as bindKey for getBindValue
                         if ($listChild->itemsExpr !== '') {
                             $bindKeys[$listChild->itemsExpr] = true;
@@ -1167,6 +1173,9 @@ class TemplateParser
                     'scrollbar-thumb' => $scrollbarThumb,
                     'scroll-top-bind' => $child->scrollTopBind,
                     'content-height' => $actualContentHeight > 0 ? $actualContentHeight : $child->contentHeight,
+                    // v6 M6: Runtime dynamic item count support
+                    'items-bind' => $capturedItemsBind,
+                    'item-height' => $capturedItemHeight,
                     'layer' => $child->layer,
                     'group_id' => $child->groupId,
                 ];
@@ -1602,8 +1611,8 @@ class TemplateParser
         $fontSize = $style['fontSize'] ?? 14;
         $borderColor = $style['border'] ?? $this->calcBorderColor($bg);
 
-        // Static expansion: generate 20 list item slots (max visible items)
-        $maxItems = 20;
+        // Static expansion: generate 100 list item slots (v6 M8: increased from 20 to support more items)
+        $maxItems = 100;
         $containerX = $listItem->x;
         $containerY = $listItem->y;
         $containerW = $listItem->w > 0 ? $listItem->w : ($style['width'] ?? 380);
@@ -1630,7 +1639,7 @@ class TemplateParser
         for ($i = 0; $i < $maxItems; $i++) {
             $itemY = $containerY + $i * $itemHeight;
 
-            // Background rect for list item
+            // Background rect for list item (v6 M7: marked as scroll-container child)
             $elements[] = [
                 'type' => 'rect',
                 'x' => $containerX,
@@ -1641,6 +1650,7 @@ class TemplateParser
                 'layer' => $listItem->layer,
                 'group_id' => $listItem->groupId,
                 'list_index' => $i,  // v6 M5: for runtime item binding
+                'scroll-container' => true,  // v6 M7: mark as scroll-container child
             ];
 
             // Text element for list item text
@@ -1660,6 +1670,7 @@ class TemplateParser
                     'layer' => $listItem->layer,
                     'group_id' => $listItem->groupId,
                     'list_index' => $i,
+                    'scroll-container' => true,  // v6 M7: mark as scroll-container child
                 ];
             }
 

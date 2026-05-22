@@ -73,27 +73,30 @@ class GdiRenderContext extends RenderContext
         $sbBg = $el['scrollbar-bg'] ?? 0x4A4A4A;
         $sbThumb = $el['scrollbar-thumb'] ?? 0x888888;
         $contentH = $el['content-height'] ?? 0;
+        $scrollTop = $el['scroll-top'] ?? 0;
 
         // 绘制容器背景
         $this->fillRect($x, $y, $w, $h, $bg);
 
-        // 计算滚动条thumb高度和位置
-        $scrollTop = $el['scroll-top'] ?? 0;
-        $thumbH = max(20, (int)($h * $h / max(1, $contentH)));
+        // v6 M7 FIX: 计算滚动条显示
         $maxScrollTop = max(0, $contentH - $h);
-        $trackH = $h - 4 - $thumbH; // scrollable track height
-        if ($maxScrollTop > 0) {
-            $thumbY = $y + 2 + (int)($scrollTop * $trackH / $maxScrollTop);
-        } else {
-            $thumbY = $y + 2;
-        }
-
-        // 绘制滚动条轨道
         $sbX = $x + $w - $sbW;
-        $this->fillRect($sbX, $y + 2, $sbW - 2, $h - 4, $sbBg);
+        
+        // 只有当内容超出容器时才绘制滚动条
+        if ($maxScrollTop > 0 && $contentH > 0) {
+            // 计算滚动条thumb高度和位置
+            $thumbH = max(20, (int)($h * $h / max(1, $contentH)));
+            $trackH = $h - 4 - $thumbH;
+            $thumbY = $y + 2 + (int)($scrollTop * $trackH / $maxScrollTop);
 
-        // 绘制滚动条thumb
-        $this->fillRect($sbX + 2, $thumbY, $sbW - 6, $thumbH, $sbThumb);
+            // 绘制滚动条轨道
+            $this->fillRect($sbX, $y + 2, $sbW - 2, $h - 4, $sbBg);
+            // 绘制滚动条thumb
+            $this->fillRect($sbX + 2, $thumbY, $sbW - 6, $thumbH, $sbThumb);
+        } else {
+            // 内容不足以滚动，清除滚动条区域
+            $this->fillRect($sbX, $y + 2, $sbW - 2, $h - 4, $sbBg);
+        }
     }
 
     /**

@@ -29,12 +29,12 @@ class AppComponent extends ReactiveComponent
     public string $scrollTop = "0";
     public string $todoItems = "[{\"id\":\"1\",\"text\":\"Task 1\"},{\"id\":\"2\",\"text\":\"Task 2\"},{\"id\":\"3\",\"text\":\"Task 3\"}]";
 
-    public function deleteItem(string $indexStr): void
+    public function deleteItem(string $idxStr): void
     {
-        $index = (int)$indexStr;
+        $idx = (int)$idxStr;
         $items = json_decode($this->todoItems, true) ?? [];
-        if ($index >= 0 && $index < count($items)) {
-            array_splice($items, $index, 1);
+        if ($idx >= 0 && $idx < count($items)) {
+            array_splice($items, $idx, 1);
         }
         $this->todoItems = json_encode($items);
         $this->dirty = true;
@@ -44,7 +44,7 @@ class AppComponent extends ReactiveComponent
     {
         $items = json_decode($this->todoItems, true) ?? [];
         $newId = (string)(count($items) + 1);
-        $items[] = ["id" => $newId, "text" => "New Task"];
+        $items[] = ["id" => $newId, "text" => "Task #" . $newId];
         $this->todoItems = json_encode($items);
         $this->dirty = true;
     }

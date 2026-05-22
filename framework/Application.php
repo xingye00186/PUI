@@ -292,6 +292,7 @@ class Application
                     $lParam = $msg[3] ?? 0;
                     $mx = $lParam & 0xFFFF;
                     $my = ($lParam >> 16) & 0xFFFF;
+                    file_put_contents('f:/work/pdv/click_debug.log', sprintf("MOUSE_DOWN: x=%d y=%d\n", $mx, $my), FILE_APPEND);
                     try {
                         $this->handleClick($mx, $my);
                     } catch (\Throwable $e) {
@@ -366,6 +367,8 @@ class Application
         // v6 M5: First pass — find scroll-container to determine scroll offset
         $scrollTop = 0;
         $scrollCtx = null; // {x, y, w, h}
+        $actualCount = 0; // v6 M6: actual items count for hit testing
+        $itemHeight = 50; // v6 M8: item height for slot calculation
         $elCount = count($elements);
         for ($i = 0; $i < $elCount; $i++) {
             $el = $elements[$i];
@@ -382,22 +385,62 @@ class Application
                     $scrollTopStr = $this->rootComponent->getBindValue($scrollTopBind);
                     $scrollTop = (int)$scrollTopStr;
                 }
+                // v6 M6: Compute actual items count for hit testing
+                $itemsBind = $el['items-bind'] ?? '';
+                if ($itemsBind !== '' && $this->rootComponent !== null) {
+                    $itemsJson = $this->rootComponent->getBindValue($itemsBind);
+                    $items = json_decode($itemsJson, true) ?? [];
+                    $actualCount = count($items);
+                }
                 break; // only one scroll-container
             }
         }
 
         // 收集所有按钮元素
         $buttons = [];
+        $debugLog = [];
         for ($i = 0; $i < $elCount; $i++) {
             $el = $elements[$i];
             if (!is_array($el)) continue;
             if (($el['type'] ?? '') === 'button') {
                 // v6 M5: Apply scroll offset for buttons inside scroll-container
-                if (($el['scroll-container'] ?? false) && $scrollCtx !== null) {
-                    $el['y'] = ($el['y'] ?? 0) - $scrollTop;
+                $isScrollChild = ($el['scroll-container'] ?? false);
+                if ($isScrollChild && $scrollCtx !== null) {
+                    $adjustedY = ($el['y'] ?? 0) - $scrollTop;
+                    // v6 M6 FIX: Skip buttons completely outside visible area
+                    $containerTop = $scrollCtx['y'];
+                    $containerBottom = $scrollCtx['y'] + $scrollCtx['h'];
+                    $btnH = $el['h'] ?? 0;
+                    if ($adjustedY + $btnH <= $containerTop || $adjustedY >= $containerBottom) {
+                        continue; // Button is not visible, skip
+                    }
+                    $el['y'] = $adjustedY;
+                    // v6 M8 FIX: Dynamic slot-to-item mapping for scrolling
+                    // Only apply for scroll-container children (not Add Item etc.)
+                    $baseIndex = (int)($scrollTop / $itemHeight);
+                    $listIndex = ($el['list_index'] ?? -1);
+                    $actualItemIndex = $listIndex - $baseIndex;
+                    if ($actualItemIndex < 0 || $actualItemIndex >= $actualCount) {
+                        continue;
+                    }
                 }
                 $buttons[] = $el;
             }
+        }
+        // v6 M8 DEBUG: log click info
+        $logLine = sprintf(
+            "CLICK: x=%d y=%d scrollTop=%d actualCount=%d buttons=%d\n",
+            $x, $y, $scrollTop, $actualCount, count($buttons)
+        );
+        file_put_contents('f:/work/pdv/click_debug.log', $logLine, FILE_APPEND);
+        
+        // Also log visible button info
+        foreach ($buttons as $idx => $btn) {
+            $btnY = $btn['y'] ?? 0;
+            $btnIdx = $btn['list_index'] ?? -1;
+            $btnArg = $btn['arg'] ?? '';
+            $logLine = sprintf("  BTN[%d]: idx=%d arg=%s y=%d\n", $idx, $btnIdx, $btnArg, $btnY);
+            file_put_contents('f:/work/pdv/click_debug.log', $logLine, FILE_APPEND);
         }
 
         $btnCount = count($buttons);
@@ -491,7 +534,44 @@ class Application
      */
     private function dispatchClick(array $btn): void
     {
+        $logLine = sprintf("DISPATCH: handler=%s arg=%s\n", $btn['handler'] ?? '', $btn['arg'] ?? '');
+        file_put_contents('f:/work/pdv/click_debug.log', $logLine, FILE_APPEND);
+        
         if ($this->rootComponent !== null) {
+            // v6 M8 FIX: Use list_index as the actual item index for deletion
+            // This fixes the issue where scrolling causes slot->item mismatch
+            $listIndex = $btn['list_index'] ?? -1;
+            $scrollTop = 0;
+            $itemHeight = 50;
+            $itemsBind = '';
+            
+            // Get scroll info from layout
+            $layout = $this->getActiveLayout();
+            $elements = (array)($layout['elements'] ?? []);
+            for ($i = 0; $i < count($elements); $i++) {
+                $el = $elements[$i];
+                if (($el['type'] ?? '') === 'scroll-container') {
+                    $scrollTopBind = $el['scroll-top-bind'] ?? '';
+                    if ($scrollTopBind !== '' && $this->rootComponent !== null) {
+                        $scrollTop = (int)$this->rootComponent->getBindValue($scrollTopBind);
+                    }
+                    $itemHeight = $el['item-height'] ?? 50;
+                    break;
+                }
+            }
+            
+            // For scroll-container children, compute actual item index
+            if (($btn['scroll-container'] ?? false) && $listIndex >= 0) {
+                $baseIndex = (int)($scrollTop / $itemHeight);
+                $actualItemIndex = $listIndex - $baseIndex;
+                // Override arg with actual item index for deleteItem handler
+                if ($btn['handler'] === 'deleteItem') {
+                    $btn['arg'] = (string)$actualItemIndex;
+                    $logLine = sprintf("  -> OVERRIDE arg to %s (baseIndex=%d)\n", $btn['arg'], $baseIndex);
+                    file_put_contents('f:/work/pdv/click_debug.log', $logLine, FILE_APPEND);
+                }
+            }
+            
             $this->rootComponent->dispatchClick($btn);
         }
     }
