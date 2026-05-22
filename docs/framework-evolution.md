@@ -1,4 +1,4 @@
-# VueCalc 框架演进文档 (v6 M2)
+# VueCalc 框架演进文档 (v6 M4)
 
 ## Context
 
@@ -587,3 +587,176 @@ swoole_compiler.exe apps/calculator/project.yml -f
 
 ### 5. 回归验证
 - 对比解释器版本和 AOT 版本的功能一致性
+
+---
+
+## v6 M4 新增功能
+
+### 1. Flex 布局引擎 ✅
+
+FlexNode AST 节点 + FlexLayout 计算类，编译时计算子元素位置。
+
+**支持特性**:
+- `direction`: row | column
+- `gap`: 子元素间距 (px)
+- `justify-content`: flex-start | center | flex-end | space-between
+- `align-items`: flex-start | center | flex-end | stretch
+- `flex-wrap`: nowrap | wrap
+
+**相关文件**:
+- `framework/compiler/flex-layout.php` - FlexLayout 类
+- `framework/compiler/ast-nodes.php` - FlexNode 定义
+- `framework/compiler/template-parser.php` - parseFlex() 方法
+
+### 2. TextBox 组件 + 键盘事件 ✅
+
+TextBoxNode 支持 v-model, placeholder, @keydown, @enter 事件。
+
+**相关文件**:
+- `framework/compiler/ast-nodes.php` - TextBoxNode 定义
+- `framework/compiler/template-parser.php` - parseTextBox() 方法
+- `framework/rendering/GdiRenderContext.php` - drawTextBoxElement() 方法
+- `framework/Application.php` - handleKeyboard() 键盘事件路由
+
+### 3. v-model 双向绑定 ✅
+
+文本输入实时同步到组件状态，通过 setBindValue() 实现。
+
+**相关文件**:
+- `framework/ReactiveComponent.php` - setBindValue() 方法
+- `framework/BaseRenderer.php` - getBindValue() 调用
+
+### 4. App 属性兼容 w/h 和 width/height ✅
+
+模板解析器现在支持两种语法：
+- `<app w="640" h="480">` ✅
+- `<app width="640" height="480">` ✅
+
+---
+
+## v6 M4 经验教训
+
+### AOT 编译限制
+
+#### 1. 禁止顶层游离代码
+
+`require_once`, `include` 不能出现在函数/类之外：
+
+```php
+// ❌ AOT 编译失败: All execution code must be within a function
+require_once __DIR__ . '/css-mappings.php';
+
+class GdiRenderContext extends RenderContext { }
+
+// ✅ AOT 安全: 内联工具函数
+private function borderColor(int $bg): int {
+    $r = min(255, (($bg >> 16) & 0xFF) + 20);
+    $g = min(255, (($bg >> 8) & 0xFF) + 20);
+    $b = min(255, ($bg & 0xFF) + 20);
+    return ($r << 16) | ($g << 8) | $b;
+}
+```
+
+**解决方案**:
+- 内联工具函数到需要的地方
+- 或将静态工具类的方法标记为 static 内联
+
+#### 2. 动态类声明处理
+
+SFC 编译器生成的类要避免重复声明：
+
+```php
+// ❌ 生成的 AppComponent.php 包含重复的类声明
+class AppComponent extends ReactiveComponent
+{
+class AppComponent extends ReactiveComponent  // ← 重复！
+```
+
+**根因**: ScriptAnalyzer::injectDirty() 返回完整 class 声明，编译器又包装一层
+
+**修复**: injectDirty() 现在只返回类体内容（不含 class 声明）
+
+```php
+// ScriptAnalyzer.php 修改后:
+public function injectDirty(string $script): string {
+    // 提取 class body，不含 class 声明
+    if (preg_match('/^class\s+\w+\s+extends\s+\w+\s*\{(.*)\}\s*$/s', $script, $m)) {
+        return $m[1];  // 只返回 { ... } 内部内容
+    }
+    return $script;
+}
+```
+
+#### 3. 静态方法调用限制
+
+`ClassName::method()` 在 AOT 下可能无法解析：
+
+```php
+// ❌ 可能编译失败
+$border = CssMappings::borderColor($bg);
+
+// ✅ AOT 安全: 内联逻辑
+$border = (($bg & 0xFF) + 20) | ((($bg >> 8) & 0xFF) + 20) << 8 | ...
+```
+
+### 模板解析改进
+
+#### parseElement 必须 advance
+
+解析完元素后必须调用 `$this->advance()` 消费 token：
+
+```php
+// ❌ 导致无限循环
+private function parseFlex(Token $openTok): FlexNode {
+    $node = new FlexNode(...);
+    // 缺少 $this->advance();
+    while (true) {
+        $child = $this->parseElement();  // 重复解析 <flex> 标签!
+    }
+}
+
+// ✅ 正确做法
+private function parseFlex(Token $openTok): FlexNode {
+    $node = new FlexNode(...);
+    $this->advance();  // 消费 <flex> 标签
+    while (true) {
+        $child = $this->parseElement();
+    }
+}
+```
+
+### 构建流程
+
+#### 使用 build.bat
+
+手动调用 swoole_compiler.exe 可能缺少环境变量，应使用 build.bat：
+
+```bash
+# ❌ 可能失败
+./swoole_compiler/swoole_compiler.exe apps/test/project.yml -f
+
+# ✅ 正确
+./build.bat test
+```
+
+build.bat 会自动:
+1. 初始化 MSVC 环境 (vcvarsall.bat)
+2. 执行 SFC 编译
+3. 执行 AOT 编译
+4. 打包到 bin/
+
+### 后续框架演进影响
+
+#### v6 M5 计划
+1. **v-for + 列表渲染引擎**: 支持动态数组数据渲染
+2. **ScrollContainer**: 滚动容器组件
+3. **FocusManager**: 焦点系统管理
+
+#### v6 M6 计划
+1. **EventBus**: 跨组件事件通信
+2. **computed 属性**: 计算属性
+3. **provide/inject**: 跨层级通信
+
+#### v6 M7 计划
+1. **元素类型系统**: 从数组结构升级为强类型 Element 类
+2. **布局 DSL**: 领域特定语言

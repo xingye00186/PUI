@@ -1,13 +1,16 @@
 <?php
 /**
- * Script Analyzer for SFC Compiler v4
+ * Script Analyzer for SFC Compiler v6
  *
  * Analyzes PHP script blocks extracted from .vue <script> sections.
  * Automatically injects $this->dirty = true markers into methods
  * that modify reactive component properties.
  *
+ * v6 M4: Returns ONLY class body (properties + methods, without class declaration).
+ *        The SFC compiler generates the full class declaration separately.
+ *
  * This eliminates the need for developers to manually write dirty markers
- * in every state-mutating method (D6 technical debt).
+ * in every state-mutating method.
  *
  * Usage: Used internally by sfc-compiler.php during code generation.
  */
@@ -21,25 +24,53 @@ class ScriptAnalyzer
      * Analyze and transform a PHP script block: remove all manual dirty markers,
      * then auto-inject them into methods that modify component properties.
      *
+     * v6 M4 FIX: Returns ONLY the class body content (everything after the opening brace
+     * of the class declaration), WITHOUT the class declaration itself.
+     * This allows the SFC compiler to generate the class declaration separately.
+     *
      * @param string $script Raw script block content from .vue file
-     * @return string Transformed script with auto-injected dirty markers
+     * @return string Transformed script body WITHOUT class declaration
      */
     public function injectDirty(string $script): string
     {
+        // v6 M4 FIX: Extract ONLY the class body, not the full class
+        // Pattern matches: class Foo extends Bar { ... }
+        $script = trim($script);
+        if (preg_match('/^class\s+\w+\s+extends\s+\w+\s*\{(.*)\}\s*$/s', $script, $m)) {
+            $classBody = $m[1];
+        } else {
+            // Fallback: if pattern doesn't match, return original script
+            // (might be just method definitions without class wrapper)
+            return $script;
+        }
+
         // Step 1: Extract property names from declarations
-        $this->propertyNames = $this->extractPropertyNames($script);
+        $this->propertyNames = $this->extractPropertyNames($classBody);
 
         if (empty($this->propertyNames)) {
-            return $script; // No reactive properties — nothing to do
+            return $classBody; // No reactive properties — nothing to do
         }
 
         // Step 2: Remove ALL existing manual $this->dirty = true; lines
-        $script = $this->removeExistingDirty($script);
+        $classBody = $this->removeExistingDirty($classBody);
 
         // Step 3: Process each method and auto-inject dirty markers
-        $script = $this->injectDirtyIntoMethods($script);
+        $classBody = $this->injectDirtyIntoMethods($classBody);
 
-        return $script;
+        return $classBody;
+    }
+
+    /**
+     * v6 M4: Extract class declaration info for SFC compiler use.
+     * Returns array with 'className' and 'extends' or null if not found.
+     */
+    public function extractClassDeclaration(string $script): ?array
+    {
+        $script = trim($script);
+        if (preg_match('/^class\s+(\w+)\s+extends\s+(\w+)/', $script, $m)) {
+            return ['className' => $m[1], 'extends' => $m[2]];
+        }
+        return null;
     }
 
     // ─── Step 1: Property extraction ────────────────────────────────

@@ -26,6 +26,12 @@ class Application
     /** v-if 实例状态追踪 (key => bool) - 记录上次渲染时的条件值 */
     private array $vifStates = [];
 
+    /** v6 M4: 焦点系统 - 当前聚焦的组件 ID */
+    private string $focusedId = '';
+
+    /** v6 M4: 聚焦的 textbox 元素数据 */
+    private ?array $focusedTextBox = null;
+
     /** 渲染器 */
     private BaseRenderer $renderer;
 
@@ -259,7 +265,7 @@ class Application
 
                 $msgType = $msg[1] ?? 0;
 
-                if ($msgType == WM_LBUTTONDOWN) {
+                if ($msgType == WinMsg::WM_LBUTTONDOWN) {
                     $lParam = $msg[3] ?? 0;
                     $mx = $lParam & 0xFFFF;
                     $my = ($lParam >> 16) & 0xFFFF;
@@ -271,7 +277,17 @@ class Application
                     }
                 }
 
-                if ($msgType == WM_QUIT) {
+                // v6 M4: 键盘事件处理
+                if ($msgType == WinMsg::WM_KEYDOWN || $msgType == WinMsg::WM_CHAR) {
+                    $wParam = $msg[2] ?? 0;
+                    try {
+                        $this->handleKeyboard($msgType, $wParam);
+                    } catch (\Throwable $e) {
+                        echo "ERROR in handleKeyboard: " . $e->getMessage() . "\n";
+                    }
+                }
+
+                if ($msgType == WinMsg::WM_QUIT) {
                     $running = false;
                     break;
                 }
@@ -369,5 +385,119 @@ class Application
         if ($this->rootComponent !== null) {
             $this->rootComponent->dispatchClick($btn);
         }
+    }
+
+    /**
+     * v6 M4: 处理键盘事件
+     *
+     * @param int $msgType WM_KEYDOWN, WM_KEYUP, WM_CHAR
+     * @param int $wParam 键码
+     */
+    private function handleKeyboard(int $msgType, int $wParam): void
+    {
+        // 如果没有焦点 textbox，尝试设置焦点
+        if ($this->focusedTextBox === null) {
+            $this->tryFocusTextBox();
+            if ($this->focusedTextBox === null) {
+                return;
+            }
+        }
+
+        $el = $this->focusedTextBox;
+        $bindKey = $el['bind'] ?? '';
+        if ($bindKey === '') return;
+
+        if ($msgType === WinMsg::WM_CHAR) {
+            // 可打印字符输入
+            $char = chr($wParam & 0xFF);
+            if (ctype_print($char) || $char === ' ') {
+                $this->appendText($bindKey, $char);
+            }
+        } elseif ($msgType === WinMsg::WM_KEYDOWN) {
+            if ($wParam === WinMsg::VK_BACK) {
+                // 退格键
+                $this->deleteTextChar($bindKey);
+            } elseif ($wParam === WinMsg::VK_DELETE) {
+                // Delete 键（向右删除）
+                $this->deleteTextChar($bindKey, true);
+            } elseif ($wParam === WinMsg::VK_RETURN || $wParam === WinMsg::VK_ESCAPE) {
+                // Enter/Escape 处理
+                $handler = $el['enterHandler'] ?? '';
+                if ($handler !== '' && $this->rootComponent !== null && method_exists($this->rootComponent, $handler)) {
+                    $this->rootComponent->$handler($wParam);
+                }
+            } else {
+                // 方向键等特殊键，传递给自定义处理器
+                $handler = $el['keyHandler'] ?? '';
+                if ($handler !== '' && $this->rootComponent !== null && method_exists($this->rootComponent, $handler)) {
+                    $this->rootComponent->$handler($wParam);
+                }
+            }
+        }
+
+        // 更新渲染（文本变化后标记 dirty）
+        if ($this->rootComponent !== null) {
+            $this->rootComponent->dirty = true;
+        }
+    }
+
+    /**
+     * v6 M4: 尝试将焦点设置到最近的 textbox 元素
+     */
+    private function tryFocusTextBox(): void
+    {
+        $layout = $this->getActiveLayout();
+        $elements = (array)($layout['elements'] ?? []);
+
+        // 逆序遍历找最后一个 textbox
+        $elCount = count($elements);
+        for ($i = $elCount - 1; $i >= 0; $i--) {
+            $el = $elements[$i];
+            if (!is_array($el)) continue;
+            if (($el['type'] ?? '') !== 'textbox') continue;
+
+            // 检查条件
+            $cond = $el['condition'] ?? null;
+            if ($cond !== null && !is_array($cond)) continue;
+            if ($cond !== null && $this->rootComponent !== null && !$this->rootComponent->evalCondition($cond)) continue;
+
+            $this->focusedTextBox = $el;
+            $this->focusedId = $el['bind'] ?? '';
+            return;
+        }
+    }
+
+    /**
+     * v6 M4: 向绑定文本追加字符
+     */
+    private function appendText(string $bindKey, string $char): void
+    {
+        if ($this->rootComponent === null) return;
+        if (!method_exists($this->rootComponent, 'setBindValue')) return;
+
+        $currentValue = $this->rootComponent->getBindValue($bindKey);
+        $newValue = $currentValue . $char;
+        $this->rootComponent->setBindValue($bindKey, $newValue);
+    }
+
+    /**
+     * v6 M4: 删除绑定文本的最后一个字符
+     */
+    private function deleteTextChar(string $bindKey, bool $forward = false): void
+    {
+        if ($this->rootComponent === null) return;
+        if (!method_exists($this->rootComponent, 'setBindValue')) return;
+
+        $currentValue = $this->rootComponent->getBindValue($bindKey);
+        if (strlen($currentValue) === 0) return;
+
+        if ($forward) {
+            // Delete: 删除光标后的字符（暂不支持光标位置，简化为删除最后一个）
+            $newValue = substr($currentValue, 0, -1);
+        } else {
+            // Backspace: 删除最后一个字符
+            $newValue = substr($currentValue, 0, -1);
+        }
+        $this->rootComponent->setBindValue($bindKey, $newValue);
     }
 }

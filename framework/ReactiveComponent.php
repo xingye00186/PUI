@@ -74,6 +74,23 @@ abstract class ReactiveComponent extends BaseComponent
     abstract public function getBindValue(string $bindKey): string;
 
     /**
+     * v6 M4: 设置绑定值（用于 v-model 双向绑定）
+     *
+     * @param string $bindKey 绑定键名
+     * @param string $value 新值
+     */
+    public function setBindValue(string $bindKey, string $value): void
+    {
+        // 动态设置属性值（受保护，子类声明实际属性）
+        // 通过 eval 执行属性赋值并标记 dirty
+        $propName = $bindKey;
+        if (property_exists($this, $propName)) {
+            $this->$propName = $value;
+            $this->dirty = true;
+        }
+    }
+
+    /**
      * 处理按钮点击
      *
      * @param array $btn 按钮数据

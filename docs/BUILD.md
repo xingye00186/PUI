@@ -194,11 +194,12 @@ MSVC 编译器环境未初始化。双击 build.bat 会自动调用 vcvarsall.ba
 
 | 错误 | 原因 | 解决 |
 |------|------|------|
-| `All execution code must be within a function` | require_once 写在顶层 | 删除，AOT 通过 sources 自动链接 |
-| `Cannot redeclare class X` | 重复声明 | 删除 require 语句 |
+| `All execution code must be within a function` | require_once 写在顶层，或其他游离代码 | 删除 require 语句，内联工具函数 |
+| `Cannot redeclare class X` | 重复声明 | 删除重复的 require/include |
 | `Undefined variable $xxx` | 未初始化变量 | 显式赋初始值 |
 | `error C3927` | 文件名含点号 | 改用下划线 |
 | `找不到 php8embed.lib` | SDK/lib/ 路径未被搜索 | 脚本已自动处理；或手动复制到编译器根目录 |
+| `Method accepts N arguments, N+1 given` | 事件处理器参数不匹配 | 使用可选参数 `?string $arg = null` |
 
 ### Q: MSYS2 / bash 中运行 build.bat 没反应？
 

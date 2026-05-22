@@ -95,6 +95,52 @@ class TextNode extends TemplateNode
     }
 }
 
+/**
+ * v6 M4: TextBox input element
+ *
+ * Supports:
+ *   - v-model for two-way binding
+ *   - placeholder text
+ *   - keyboard events (@keyup, @keydown, @enter)
+ *   - cursor position tracking
+ */
+class TextBoxNode extends TemplateNode
+{
+    public int $x;
+    public int $y;
+    public int $w;
+    public int $h;
+    public string $vModel;       // v-model property name
+    public string $placeholder; // placeholder text
+    public string $class;
+    public string $align;
+    public string $keyHandler;    // @keyup handler
+    public string $enterHandler; // @enter handler
+
+    public function __construct(
+        int $x, int $y, int $w, int $h,
+        string $vModel,
+        string $placeholder = '',
+        string $class = 'textbox',
+        string $align = 'left',
+        string $keyHandler = '',
+        string $enterHandler = '',
+        int $line = 0
+    ) {
+        parent::__construct($line);
+        $this->x = $x;
+        $this->y = $y;
+        $this->w = $w;
+        $this->h = $h;
+        $this->vModel = $vModel;
+        $this->placeholder = $placeholder;
+        $this->class = $class;
+        $this->align = $align;
+        $this->keyHandler = $keyHandler;
+        $this->enterHandler = $enterHandler;
+    }
+}
+
 class GridNode extends TemplateNode
 {
     public int $x;
@@ -199,6 +245,56 @@ class ForNode extends TemplateNode
         $this->itemVar = $itemVar;
         $this->sourceExpr = $sourceExpr;
         $this->keyExpr = $keyExpr;
+    }
+}
+
+/**
+ * v6 M4: Flex container node
+ *
+ * Represents a flex container that arranges children in a row or column.
+ * The SFC compiler expands this at compile-time into absolute-positioned elements.
+ *
+ * Supports:
+ *   - direction: row | column
+ *   - gap: spacing between children
+ *   - justify-content: flex-start | center | flex-end | space-between
+ *   - align-items: stretch | flex-start | center | flex-end
+ *   - flex-wrap: nowrap | wrap
+ */
+class FlexNode extends TemplateNode
+{
+    public int $x;
+    public int $y;
+    public int $w;
+    public int $h;
+    public string $direction;  // row | column
+    public int $gap;           // spacing between children
+    public string $justify;     // main-axis alignment
+    public string $align;      // cross-axis alignment
+    public string $wrap;       // nowrap | wrap
+
+    /** @var TemplateNode[] */
+    public array $children = [];
+
+    public function __construct(
+        int $x, int $y, int $w, int $h,
+        string $direction = 'row',
+        int $gap = 0,
+        string $justify = 'flex-start',
+        string $align = 'stretch',
+        string $wrap = 'nowrap',
+        int $line = 0
+    ) {
+        parent::__construct($line);
+        $this->x = $x;
+        $this->y = $y;
+        $this->w = $w;
+        $this->h = $h;
+        $this->direction = $direction;
+        $this->gap = $gap;
+        $this->justify = $justify;
+        $this->align = $align;
+        $this->wrap = $wrap;
     }
 }
 

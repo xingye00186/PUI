@@ -14,7 +14,9 @@
  */
 
 require_once __DIR__ . '/ast-nodes.php';
+require_once __DIR__ . '/css-mappings.php';
 require_once __DIR__ . '/component-registry.php';
+require_once __DIR__ . '/flex-layout.php';
 
 // ============================================================
 // Token types and Token class
@@ -237,16 +239,15 @@ class TemplateParser
         $attrs = $this->parseAttrs($openTok->content);
 
         $title  = $attrs['title'] ?? 'Untitled';
-        $width  = (int)($attrs['width'] ?? 336);
-        $height = (int)($attrs['height'] ?? 430);
+        // 支持 w/h 和 width/height 两种语法
+        $width  = (int)($attrs['width'] ?? $attrs['w'] ?? 336);
+        $height = (int)($attrs['height'] ?? $attrs['h'] ?? 430);
 
-        if (!isset($attrs['width']) || !isset($attrs['height'])) {
-            $this->error(
-                "<app> missing required attributes: " .
-                (isset($attrs['width']) ? '' : 'width ') .
-                (isset($attrs['height']) ? '' : 'height'),
-                $openTok->line
-            );
+        if (!isset($attrs['width']) && !isset($attrs['w'])) {
+            $this->error('<app> missing required attribute: width (or w)', $openTok->line);
+        }
+        if (!isset($attrs['height']) && !isset($attrs['h'])) {
+            $this->error('<app> missing required attribute: height (or h)', $openTok->line);
         }
 
         $app = new AppNode($title, $width, $height, $openTok->line);
@@ -311,6 +312,10 @@ class TemplateParser
                 }
                 return $this->parseGrid($tok);
 
+            case 'textbox':
+                // v6 M4: TextBox input element
+                return $this->parseTextBox($tok);
+
             case 'btn':
                 $this->error('<btn> must be inside <grid>, not directly in <app>', $tok->line);
                 $this->advance();
@@ -325,6 +330,10 @@ class TemplateParser
                 }
                 return $this->parseTemplate($tok);
 
+            case 'flex':
+                // v6 M4: Flex container support
+                return $this->parseFlex($tok);
+
             default:
                 // v5 M2: Check component registry before reporting unknown
                 if ($this->componentRegistry !== null) {
@@ -334,7 +343,7 @@ class TemplateParser
                     }
                 }
                 // Unknown tag: report but include in AST
-                $this->error("Unknown element <$tagName> — only app/rect/text/grid/btn/template are supported", $tok->line);
+                $this->error("Unknown element <$tagName> — only app/rect/text/textbox/grid/btn/template/flex are supported", $tok->line);
                 $node = new UnknownNode($tagName, $tok->line);
                 $this->advance();
                 return $node;
@@ -523,6 +532,118 @@ class TemplateParser
         }
 
         return $forNode;
+    }
+
+    /**
+     * v6 M4: Parse <flex> container
+     *
+     * Syntax:
+     *   <flex direction="column" gap="8" justify="center" align="stretch">
+     *     <rect ... />
+     *     <rect ... />
+     *   </flex>
+     */
+    private function parseFlex(Token $openTok): FlexNode
+    {
+        $attrs = $this->parseAttrs($openTok->content);
+
+        $x = (int)($attrs['x'] ?? 0);
+        $y = (int)($attrs['y'] ?? 0);
+        $w = (int)($attrs['w'] ?? 0);
+        $h = (int)($attrs['h'] ?? 0);
+        $direction = $attrs['direction'] ?? 'row';
+        $gap = (int)($attrs['gap'] ?? 0);
+        $justify = $attrs['justify'] ?? 'flex-start';
+        $align = $attrs['align'] ?? 'stretch';
+        $wrap = $attrs['wrap'] ?? 'nowrap';
+
+        $node = new FlexNode($x, $y, $w, $h, $direction, $gap, $justify, $align, $wrap, $openTok->line);
+
+        // CRITICAL: Must advance past the <flex> opening tag before parsing children
+        $this->advance();
+
+        // Parse children until </flex>
+        while (true) {
+            $tok = $this->current();
+
+            if ($tok->type === TOK_EOF) {
+                $this->error('Unclosed <flex> (missing </flex>)', $openTok->line);
+                break;
+            }
+
+            if ($tok->type === TOK_TAG_CLOSE) {
+                $closeName = $this->getTagName($tok->content);
+                if ($closeName === 'flex') {
+                    $this->advance(); // consume </flex>
+                    break;
+                }
+                $this->error("Unexpected closing tag </$closeName> inside <flex>", $tok->line);
+                $this->advance();
+                continue;
+            }
+
+            if ($tok->type === TOK_TAG_OPEN || $tok->type === TOK_TAG_SELF) {
+                $child = $this->parseElement();
+                if ($child !== null) {
+                    $node->children[] = $child;
+                }
+                continue;
+            }
+
+            // Skip comments, text, etc.
+            $this->advance();
+        }
+
+        return $node;
+    }
+
+    /**
+     * v6 M4: Parse <textbox> input element
+     *
+     * Syntax:
+     *   <textbox x="10" y="10" w="200" h="30"
+     *           v-model="searchText"
+     *           placeholder="Search..."
+     *           @keyup="onSearchKeyup"
+     *           @enter="onSearch" />
+     */
+    private function parseTextBox(Token $tok): TextBoxNode
+    {
+        $attrs = $this->parseAttrs($tok->content);
+        $this->advance();
+
+        $x = (int)($attrs['x'] ?? 0);
+        $y = (int)($attrs['y'] ?? 0);
+        $w = (int)($attrs['w'] ?? 200);
+        $h = (int)($attrs['h'] ?? 30);
+        $vModel = $attrs['v-model'] ?? '';
+        $placeholder = $attrs['placeholder'] ?? '';
+        $class = $attrs['class'] ?? 'textbox';
+        $align = $attrs['align'] ?? 'left';
+
+        // Parse event handlers
+        $keyHandler = '';
+        $enterHandler = '';
+        if (isset($attrs['@keyup'])) {
+            $keyHandler = $attrs['@keyup'];
+        }
+        if (isset($attrs['@enter'])) {
+            $enterHandler = $attrs['@enter'];
+        } elseif (isset($attrs['@keydown'])) {
+            // Map @keydown to general key handler
+            $keyHandler = $attrs['@keydown'];
+        }
+
+        return new TextBoxNode(
+            $x, $y, $w, $h,
+            $vModel,
+            $placeholder,
+            $class,
+            $align,
+            $keyHandler,
+            $enterHandler,
+            $tok->line
+        );
     }
 
     private function parseBtn(Token $tok): BtnNode
@@ -756,6 +877,40 @@ class TemplateParser
                         $elements[] = $el;
                     }
                 }
+            } elseif ($child instanceof FlexNode) {
+                // v6 M4: Flex container — layout children and expand into elements
+                $flexElements = $this->expandFlexNode($child, $classStyles);
+                foreach ($flexElements as $el) {
+                    $elements[] = $el;
+                }
+            } elseif ($child instanceof TextBoxNode) {
+                // v6 M4: TextBox — collect v-model as bindKey for getBindValue
+                $style = $classStyles[$child->class] ?? [];
+                if ($child->vModel !== '') {
+                    $bindKeys[$child->vModel] = true;
+                }
+                $elements[] = [
+                    'type'     => 'textbox',
+                    'bind'     => $child->vModel,
+                    'x'        => $child->x,
+                    'y'        => $child->y,
+                    'w'        => $child->w,
+                    'h'        => $child->h,
+                    'align'    => $child->align,
+                    'fontSize' => $style['fontSize'] ?? 16,
+                    'color'    => $style['fg'] ?? 0xFFFFFF,
+                    'bg'       => $style['bg'] ?? 0x1E1E1E,
+                    'cursor'   => true,
+                    'layer'    => $child->layer,
+                    'group_id' => $child->groupId,
+                ];
+                // Collect keyboard event handlers
+                if ($child->keyHandler !== '') {
+                    $handlerMap[$child->keyHandler] = true;
+                }
+                if ($child->enterHandler !== '') {
+                    $handlerMap[$child->enterHandler] = true;
+                }
             }
         }
 
@@ -968,6 +1123,150 @@ class TemplateParser
      * @param array $classStyles
      * @return array Array of iteration results, each containing 'buttons' and 'elements'
      */
+    /**
+     * v6 M4: Expand FlexNode into flat elements array
+     *
+     * Uses FlexLayout engine to compute child positions at compile time.
+     */
+    private function expandFlexNode(FlexNode $flex, array $classStyles): array
+    {
+        // Collect child dimensions for flex calculation
+        $children = [];
+        foreach ($flex->children as $child) {
+            $dims = $this->getChildDimensions($child, $classStyles);
+            if ($dims !== null) {
+                $children[] = $dims;
+            }
+        }
+
+        if (count($children) === 0) {
+            return [];
+        }
+
+        // Use FlexLayout engine
+        $flexEngine = new FlexLayout(
+            $flex->x, $flex->y, $flex->w, $flex->h,
+            $flex->direction, $flex->gap,
+            $flex->justify, $flex->align, $flex->wrap
+        );
+
+        $positions = $flexEngine->layout($children);
+
+        // Build flat elements array with computed positions
+        $elements = [];
+        for ($i = 0; $i < count($flex->children); $i++) {
+            $child = $flex->children[$i];
+            $pos = $positions[$i];
+
+            if ($child instanceof RectNode) {
+                $style = $classStyles[$child->class] ?? [];
+                $elements[] = [
+                    'type'  => 'rect',
+                    'x'     => $pos['x'],
+                    'y'     => $pos['y'],
+                    'w'     => $pos['w'],
+                    'h'     => $pos['h'],
+                    'color' => $style['bg'] ?? 0,
+                    'layer' => $child->layer,
+                    'group_id' => $child->groupId,
+                    'flex_index' => $i,
+                ];
+            } elseif ($child instanceof TextNode) {
+                $style = $classStyles[$child->class] ?? [];
+                $elements[] = [
+                    'type'     => 'text',
+                    'bind'     => $child->bind,
+                    'x'        => $pos['x'],
+                    'y'        => $pos['y'],
+                    'w'        => $pos['w'],
+                    'h'        => $pos['h'],
+                    'align'    => $child->align,
+                    'fontSize' => $style['fontSize'] ?? 16,
+                    'color'    => $style['fg'] ?? 0xFFFFFF,
+                    'bold'     => $style['bold'] ?? 0,
+                    'layer'    => $child->layer,
+                    'group_id' => $child->groupId,
+                    'flex_index' => $i,
+                ];
+            } elseif ($child instanceof GridNode) {
+                // Expand grid children within flex container
+                $gx = $pos['x'];
+                $gy = $pos['y'];
+                foreach ($child->buttons as $btn) {
+                    $style  = $classStyles[$btn->class] ?? [];
+                    $bg     = $style['bg'] ?? 0x323232;
+                    $fg     = $style['fg'] ?? 0xFFFFFF;
+                    $border = $style['border'] ?? CssMappings::borderColor($bg);
+
+                    $bx = $gx + $btn->col * $child->cellW + $child->margin;
+                    $by = $gy + $btn->row * $child->cellH + $child->margin;
+                    $bw = $child->cellW - $child->margin * 2;
+                    $bh = $child->cellH - $child->margin * 2;
+
+                    $elements[] = [
+                        'type'   => 'button',
+                        'label'  => $btn->label,
+                        'x'      => $bx,
+                        'y'      => $by,
+                        'w'      => $bw,
+                        'h'      => $bh,
+                        'bg'     => $bg,
+                        'fg'     => $fg,
+                        'border' => $border,
+                        'handler' => $btn->handler,
+                        'arg'    => $btn->arg,
+                        'layer'  => $child->layer,
+                        'group_id' => $child->groupId,
+                        'flex_index' => $i,
+                    ];
+                }
+            }
+            // ComponentRefNode, ForNode, UnknownNode: skip in flex expansion
+        }
+
+        return $elements;
+    }
+
+    /**
+     * Get dimensions from a child node for flex calculation
+     */
+    private function getChildDimensions(TemplateNode $child, array $classStyles): ?array
+    {
+        if ($child instanceof RectNode) {
+            return [
+                'w' => $child->w,
+                'h' => $child->h,
+                'flex-grow' => 0,
+                'flex-shrink' => 1.0,
+                'flex-basis' => 0,
+                'align-self' => 'stretch',
+            ];
+        } elseif ($child instanceof TextNode) {
+            $style = $classStyles[$child->class] ?? [];
+            $h = (int)($style['height'] ?? 30);
+            return [
+                'w' => (int)($style['width'] ?? 100),
+                'h' => $h,
+                'flex-grow' => 0,
+                'flex-shrink' => 1.0,
+                'flex-basis' => 0,
+                'align-self' => 'stretch',
+            ];
+        } elseif ($child instanceof GridNode) {
+            $w = $child->cols * $child->cellW;
+            $h = $child->rows * $child->cellH;
+            return [
+                'w' => $w,
+                'h' => $h,
+                'flex-grow' => 0,
+                'flex-shrink' => 1.0,
+                'flex-basis' => 0,
+                'align-self' => 'stretch',
+            ];
+        }
+        return null;
+    }
+
     private function expandForNode(ForNode $forNode, array $classStyles): array
     {
         // Static button data for numpad expansion

@@ -33,6 +33,7 @@ require_once $compilerDir . '/aot-validator.php';
 require_once $compilerDir . '/script-analyzer.php';
 require_once $compilerDir . '/component-registry.php';
 require_once $compilerDir . '/component-resolver.php';
+require_once $compilerDir . '/flex-layout.php';
 
 // ============================================================
 // v6 M3: Helper — build component registry from components/ directory

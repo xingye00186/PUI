@@ -1,6 +1,31 @@
+# VueCalc v6 M4 Test Application Configuration
+#
+# 功能: Flex 布局引擎、TextBox 组件、v-model 双向绑定
+#
+# AOT 编译:
+#   ./swoole_compiler/swoole_compiler.exe apps/test/project.yml -f
+
 name: test
 version: 1.0.0
 mode: bin
 no-console: false
 sources:
+  # 应用入口
   - main.php
+
+  # SFC 生成的组件
+  - ./gen
+
+  # 框架运行时
+  - ../../framework/Application.php
+  - ../../framework/interfaces/ComponentInterface.php
+  - ../../framework/BaseComponent.php
+  - ../../framework/ReactiveComponent.php
+  - ../../framework/ChangeQueue.php
+  - ../../framework/BaseRenderer.php
+  - ../../framework/rendering/RenderContext.php
+  - ../../framework/rendering/GdiRenderContext.php
+
+  # C++ 桥接层 + stub
+  - ../../stub
+  - ../../cpp

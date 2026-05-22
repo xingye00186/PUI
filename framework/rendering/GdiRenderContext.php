@@ -1,5 +1,4 @@
 <?php
-
 /**
  * GdiRenderContext - Win32 GDI 后端实现 (v6 M3)
  *
@@ -50,6 +49,8 @@ class GdiRenderContext extends RenderContext
             $this->drawTextElement($el);
         } elseif ($type === 'button') {
             $this->drawButtonElement($el);
+        } elseif ($type === 'textbox') {
+            $this->drawTextBoxElement($el);
         }
     }
 
@@ -111,5 +112,65 @@ class GdiRenderContext extends RenderContext
     public function drawButton(int $x, int $y, int $w, int $h, int $bg, int $border): void
     {
         vue_draw_button($this->hdc, $x, $y, $w, $h, $bg, $border);
+    }
+
+    /**
+     * v6 M4: Draw TextBox element (input field background + text + cursor)
+     *
+     * AOT兼容: 内联 borderColor 计算, 避免 require_once
+     */
+    private function drawTextBoxElement(array $el): void
+    {
+        $x = $el['x'] ?? 0;
+        $y = $el['y'] ?? 0;
+        $w = $el['w'] ?? 0;
+        $h = $el['h'] ?? 0;
+        $bg = $el['bg'] ?? 0x1E1E1E;
+        // 内联 borderColor 计算 (CssMappings::borderColor 的简化版本)
+        $r = min(255, (($bg >> 16) & 0xFF) + 20);
+        $g = min(255, (($bg >> 8) & 0xFF) + 20);
+        $b = min(255, ($bg & 0xFF) + 20);
+        $border = ($r << 16) | ($g << 8) | $b;
+        $text = $el['text'] ?? '';
+        $fontSize = $el['fontSize'] ?? 16;
+        $color = $el['color'] ?? 0xFFFFFF;
+        $align = $el['align'] ?? 'left';
+
+        // Draw background
+        $this->fillRect($x, $y, $w, $h, $bg);
+
+        // Draw border (button-like)
+        vue_draw_button($this->hdc, $x, $y, $w, $h, $bg, $border);
+
+        // Draw text (placeholder if empty)
+        $displayText = $text;
+        if ($displayText === '' && isset($el['placeholder'])) {
+            $displayText = $el['placeholder'];
+            $color = 0x666666; // Dimmed color for placeholder
+        }
+
+        if ($displayText !== '') {
+            // Text alignment
+            $textLen = strlen($displayText);
+            $charWidth = (int)($fontSize * 0.6);
+            $textWidth = $textLen * $charWidth;
+            $textX = $x + 8; // Padding
+            if ($align === 'right') {
+                $textX = $x + $w - 8 - $textWidth;
+            } elseif ($align === 'center') {
+                $textX = $x + (int)(($w - $textWidth) / 2);
+            }
+            $textY = $y + (int)(($h - $fontSize) / 2);
+
+            $this->drawText($textX, $textY, $displayText, $fontSize, $color, 0);
+        }
+
+        // Draw cursor if focused
+        if (($el['cursor'] ?? false) && $text !== '') {
+            $cursorX = $x + 8 + $textLen * $charWidth;
+            $cursorY = $y + (int)(($h - $fontSize) / 2);
+            $cursorH = $fontSize;
+            vue_fill_rect($this->hdc, $cursorX, $cursorY, 2, $cursorH, 0xFFFFFF);
+        }
     }
 }
