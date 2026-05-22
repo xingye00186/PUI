@@ -1,12 +1,10 @@
 <?php
 
 /**
- * BaseRenderer - 泛化数据驱动渲染器 (v6 M2)
+ * BaseRenderer - 泛化数据驱动渲染器 (v6 M3)
  *
- * 仅保留渲染调度逻辑，组件管理移至 Application。
- * 支持两阶段分层渲染 (v5 M3 layer 机制)。
- *
- * hdc 由 GdiRenderContext 内部持有，绘制方法不需要传递 hdc 参数。
+ * 职责：数据预处理（绑定值解析、字号自适应、对齐计算）+ 绘制调度
+ * 绘制逻辑委托给 RenderContext.drawElement()，BaseRenderer 专注于数据转换。
  *
  * AOT 限制:
  *   - foreach 遍历关联数组时 key 类型推断错误 → 使用 array_keys() + for 循环
@@ -23,72 +21,20 @@ class BaseRenderer
         $this->ctx = $ctx;
     }
 
-    /** 从组件属性获取绑定值 */
+    /**
+     * 从组件属性获取绑定值
+     * 用于在绘制前解析元素的 bind 字段
+     */
     protected function getBindValue(string $bindKey): string
     {
         return $this->component->getBindValue($bindKey);
     }
 
-    /** 渲染文本元素（支持对齐和动态字号） */
-    protected function renderTextElement(array $el): void
-    {
-        $bindKey = $el['bind'] ?? '';
-
-        if ($bindKey !== '') {
-            $text = $this->getBindValue($bindKey);
-            if ($text === '') {
-                return;
-            }
-        } else {
-            return;
-        }
-
-        $fontSize = $el['fontSize'] ?? 16;
-        $color    = $el['color'] ?? 0xFFFFFF;
-        $bold     = $el['bold'] ?? 0;
-        $align    = $el['align'] ?? 'left';
-        $x        = $el['x'] ?? 0;
-        $y        = $el['y'] ?? 0;
-
-        // 动态字号调整（长数字时缩小）
-        $textLen = strlen($text);
-        if ($textLen > 12 && $fontSize > 24) {
-            $fontSize = 24;
-        }
-        if ($textLen > 16 && $fontSize > 18) {
-            $fontSize = 18;
-        }
-
-        // 右对齐
-        if ($align === 'right' && isset($el['containerW'])) {
-            $containerW = $el['containerW'];
-            $containerX = $el['containerX'] ?? 0;
-            $charWidth  = (int)($fontSize * 0.6);
-            $textWidth  = $textLen * $charWidth;
-            $rightEdge  = $containerX + $containerW;
-            $x = $rightEdge - 12 - $textWidth;
-            if ($x < $containerX + 4) {
-                $x = $containerX + 4;
-            }
-        }
-
-        // 居中对齐
-        if ($align === 'center' && isset($el['containerW'])) {
-            $containerW = $el['containerW'];
-            $containerX = $el['containerX'] ?? 0;
-            $charWidth  = (int)($fontSize * 0.6);
-            $textWidth  = $textLen * $charWidth;
-            $x = $containerX + (int)(($containerW - $textWidth) / 2);
-            if ($x < $containerX) {
-                $x = $containerX;
-            }
-        }
-
-        $this->ctx->drawText($x, $y, $text, $fontSize, $color, $bold);
-    }
-
     /**
-     * 数据驱动渲染: 两阶段分层渲染 (v6 M2)
+     * 数据驱动渲染: 两阶段分层渲染 (v6 M3)
+     *
+     * Phase 1: 确定最高活跃层
+     * Phase 2: 分层遍历 elements，调用 ctx->drawElement() 统一绘制
      *
      * @param array $layout 预处理后的布局数据 ['elements' => [...]]
      *   elements 包含: rect, text, button 等类型
@@ -96,7 +42,6 @@ class BaseRenderer
      */
     public function render(array $layout): void
     {
-
         $this->ctx->beginFrame();
 
         // 获取预处理后的布局数据（统一 elements 数组）
@@ -118,7 +63,7 @@ class BaseRenderer
             if ($layer > $maxLayer) $maxLayer = $layer;
         }
 
-        // ====== Phase 2: 分层渲染（统一遍历 elements） ======
+        // ====== Phase 2: 分层渲染，统一调用 drawElement ======
         for ($l = 0; $l <= $maxLayer; $l++) {
             for ($i = 0; $i < $elCount; $i++) {
                 $el = $elements[$i];
@@ -129,37 +74,53 @@ class BaseRenderer
                 if ($cond !== null && !is_array($cond)) continue;
                 if ($cond !== null && !$this->component->evalCondition($cond)) continue;
 
-                $type = $el['type'] ?? 'rect';
+                // 预处理：解析绑定值并添加到 el['text']（AOT 安全写法）
+                $bindKey = $el['bind'] ?? '';
+                if ($bindKey !== '') {
+                    $el['text'] = $this->getBindValue($bindKey);
+                }
 
-                if ($type === 'rect') {
-                    $this->ctx->fillRect(
-                        $el['x'] ?? 0,
-                        $el['y'] ?? 0,
-                        $el['w'] ?? 0,
-                        $el['h'] ?? 0,
-                        $el['color'] ?? 0
-                    );
-                } elseif ($type === 'text') {
-                    $this->renderTextElement($el);
-                } elseif ($type === 'button') {
-                    // 绘制按钮背景和边框
-                    $this->ctx->drawButton(
-                        $el['x'] ?? 0,
-                        $el['y'] ?? 0,
-                        $el['w'] ?? 0,
-                        $el['h'] ?? 0,
-                        $el['bg'] ?? 0,
-                        $el['border'] ?? 0
-                    );
-                    // 按钮文字居中
+                // 字号自适应（长数字时缩小）
+                $fontSize = $el['fontSize'] ?? 16;
+                $textLen = strlen($el['text'] ?? '');
+                if ($textLen > 12 && $fontSize > 24) {
+                    $el['fontSize'] = 24;
+                    $fontSize = 24;
+                }
+                if ($textLen > 16 && $fontSize > 18) {
+                    $el['fontSize'] = 18;
+                    $fontSize = 18;
+                }
+
+                // 对齐计算（修改 x 坐标）
+                $align = $el['align'] ?? 'left';
+                if (($align === 'right' || $align === 'center') && isset($el['containerW'])) {
+                    $containerW = $el['containerW'];
+                    $containerX = $el['containerX'] ?? 0;
+                    $charWidth = (int)($fontSize * 0.6);
+                    $textWidth = $textLen * $charWidth;
+                    if ($align === 'right') {
+                        $el['x'] = $containerX + $containerW - 12 - $textWidth;
+                        if ($el['x'] < $containerX + 4) $el['x'] = $containerX + 4;
+                    } else {
+                        $el['x'] = $containerX + (int)(($containerW - $textWidth) / 2);
+                        if ($el['x'] < $containerX) $el['x'] = $containerX;
+                    }
+                }
+
+                // 按钮标签居中计算
+                if ($el['type'] === 'button') {
                     $label = $el['label'] ?? '';
                     $labelLen = strlen($label);
                     $labelFontSize = 22;
                     $labelCharW = (int)($labelFontSize * 0.6);
-                    $labelX = ($el['x'] ?? 0) + (int)((($el['w'] ?? 0) - $labelLen * $labelCharW) / 2);
-                    $labelY = ($el['y'] ?? 0) + (int)((($el['h'] ?? 0) - $labelFontSize) / 2);
-                    $this->ctx->drawText($labelX, $labelY, $label, $labelFontSize, $el['fg'] ?? 0xFFFFFF, 1);
+                    $el['labelFontSize'] = $labelFontSize;
+                    $el['labelX'] = ($el['x'] ?? 0) + (int)((($el['w'] ?? 0) - $labelLen * $labelCharW) / 2);
+                    $el['labelY'] = ($el['y'] ?? 0) + (int)((($el['h'] ?? 0) - $labelFontSize) / 2);
                 }
+
+                // 统一调用 drawElement 绘制
+                $this->ctx->drawElement($el);
             }
         }
 
