@@ -202,7 +202,7 @@ if not "%VUE_FILE%"=="" (
 if "%VUE_BASE%"=="" set "VUE_BASE=%EXE_NAME%"
 
 echo [配置] EXE: %OUTPUT_EXE%
-if "%HAS_VUE%"=="1" echo [配置] SFC: %VUE_FILE% -^> gen\%VUE_BASE%.gen.php + gen\%VUE_BASE%Layout_gen.php
+if "%HAS_VUE%"=="1" echo [配置] SFC: %VUE_FILE% -^> gen\%VUE_BASE%Component.php + gen\ComponentFactory.php
 echo.
 
 :: ====================================================================
@@ -231,11 +231,11 @@ echo.
 if "%HAS_VUE%"=="0" goto :skip_sfc
 
 echo ========================================
-echo   Step 1: SFC 编译 ^(Vue -^> .gen.php^)
+echo   Step 1: SFC 编译 ^(Vue -^> Component.php^)
 echo ========================================
 echo   Input: %VUE_FILE%
-echo   Output: gen\%VUE_BASE%.gen.php
-echo           gen\%VUE_BASE%Layout_gen.php
+echo   Output: gen\%VUE_BASE%Component.php
+echo           gen\ComponentFactory.php
 echo.
 
 cd /d "%FRAMEWORK_ROOT%"
@@ -249,11 +249,11 @@ if !SFC_EXIT! neq 0 (
 
 :: 验证输出文件
 cd /d "%APP_DIR%"
-if not exist "gen\%VUE_BASE%.gen.php" (
-    echo [警告] SFC 输出缺失: gen\%VUE_BASE%.gen.php
+if not exist "gen\%VUE_BASE%Component.php" (
+    echo [警告] SFC 输出缺失: gen\%VUE_BASE%Component.php
 )
-if not exist "gen\%VUE_BASE%Layout_gen.php" (
-    echo [警告] SFC 输出缺失: gen\%VUE_BASE%Layout_gen.php
+if not exist "gen\ComponentFactory.php" (
+    echo [警告] SFC 输出缺失: gen\ComponentFactory.php
 )
 
 echo   [完成] SFC 编译成功

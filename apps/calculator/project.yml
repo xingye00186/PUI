@@ -27,9 +27,3 @@ sources:
   - ../../stub
   - ../../cpp
 
-# v6 M2: Component registry — maps custom tags to .vue source files
-# (由 SFC 编译器读取，AOT 忽略)
-components:
-  display-panel: ./components/DisplayPanel.vue
-  num-pad: ./components/NumPad.vue
-  about-dialog: ./components/AboutDialog.vue

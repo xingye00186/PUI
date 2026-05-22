@@ -17,7 +17,7 @@
  *   - 输出文件名从 *.gen.php 改为 *Component.php
  *   - 生成 getLayout() 方法替代布局函数
  *   - 主组件生成 registerChildren() 方法注册子组件
- *   - 主组件生成 getBaseComponents() 方法返回初始组件树
+ *   - 主组件生成 onMount/onUnmount 生命周期方法
  *   - 不再生成 AppLayout_gen.php
  *
  * This tool runs OUTSIDE the AOT pipeline (standard PHP CLI).
@@ -35,57 +35,223 @@ require_once $compilerDir . '/component-registry.php';
 require_once $compilerDir . '/component-resolver.php';
 
 // ============================================================
-// v5 M2: Helper — load component registry from project.yml
+// v6 M3: Helper — build component registry from components/ directory
+// Automatically scans app/components/*.vue and maps tagName → file path
 // ============================================================
 function loadComponentRegistry(string $vueFile): ComponentRegistry
 {
     $registry = new ComponentRegistry();
     $appDir = dirname(realpath($vueFile));
-    $ymlFile = $appDir . DIRECTORY_SEPARATOR . 'project.yml';
+    $componentsDir = $appDir . DIRECTORY_SEPARATOR . 'components';
 
-    if (!file_exists($ymlFile)) {
+    if (!is_dir($componentsDir)) {
         return $registry;
     }
 
-    $yml = file_get_contents($ymlFile);
-    if (preg_match('/^components:\s*$/m', $yml)) {
-        if (preg_match_all('/^  (\S+):\s*(.+)$/m', $yml, $matches, PREG_SET_ORDER)) {
-            $inComponents = false;
-            $config = [];
-            foreach (explode("\n", $yml) as $line) {
-                if (trim($line) === 'components:') {
-                    $inComponents = true;
-                    continue;
-                }
-                if ($inComponents) {
-                    if ($line === '' || (strlen($line) > 0 && $line[0] !== ' ' && $line[0] !== "\t")) {
-                        if (strlen(trim($line)) > 0 && strpos($line, ':') !== false && $line[0] !== ' ') {
-                            $inComponents = false;
-                            continue;
-                        }
-                        if (strlen(trim($line)) === 0) {
-                            continue;
-                        }
-                        if ($line[0] !== ' ') {
-                            $inComponents = false;
-                            continue;
-                        }
-                    }
-                    if (preg_match('/^\s+(\S+):\s*(.+)$/', $line, $m)) {
-                        $config[$m[1]] = trim($m[2]);
-                    }
-                }
-            }
-            if (count($config) > 0) {
-                $warnings = $registry->load($config, $appDir);
-                foreach ($warnings as $w) {
-                    echo "  [WARN] ComponentRegistry: $w\n";
-                }
-            }
+    // Scan all .vue files in components/ directory
+    $files = glob($componentsDir . DIRECTORY_SEPARATOR . '*.vue');
+    $config = [];
+    foreach ($files as $file) {
+        $baseName = pathinfo($file, PATHINFO_FILENAME);
+        // Convert filename to tag-name: AboutDialog → about-dialog
+        $tagName = strtolower(preg_replace('/([a-z])([A-Z])/', '$1-$2', $baseName));
+        $tagName = strtolower($tagName);
+        if ($tagName === '') continue;
+        $relativePath = 'components' . DIRECTORY_SEPARATOR . basename($file);
+        $config[$tagName] = $relativePath;
+    }
+
+    if (count($config) > 0) {
+        $warnings = $registry->load($config, $appDir);
+        foreach ($warnings as $w) {
+            echo "  [WARN] ComponentRegistry: $w\n";
         }
     }
 
     return $registry;
+}
+
+// ============================================================
+// v6 M3: PHASE 1 — Pre-compile all child components to gen/
+// This runs BEFORE the root component compilation so that gen/
+// is populated. Phase 2 will scan gen/ to build ComponentFactory.
+// ============================================================
+function compileChildComponents(ComponentRegistry $registry, string $outDir): void
+{
+    $allComponents = $registry->all();
+    if (count($allComponents) === 0) {
+        return;
+    }
+
+    echo "\n--- Phase 1: Compiling child components ---\n";
+
+    foreach ($allComponents as $tagName => $vuePath) {
+        if (!file_exists($vuePath)) {
+            echo "  [SKIP] $tagName: source file not found\n";
+            continue;
+        }
+
+        $baseName = pathinfo($vuePath, PATHINFO_FILENAME);
+        $className = componentTagToComponentName($tagName);
+
+        echo "  Compiling: $vuePath\n";
+
+        $source = file_get_contents($vuePath);
+
+        // Extract blocks
+        $template = '';
+        $script = '';
+        $styles = '';
+        if (preg_match('#<template[^>]*>(.*?)</template>#s', $source, $m)) {
+            $template = $m[1];
+        }
+        if (preg_match('#<style[^>]*>(.*?)</style>#s', $source, $m)) {
+            $styles = $m[1];
+        }
+
+        // Parse styles
+        $styleWarnings = [];
+        $classStyles = CssMappings::parseStyleBlock($styles, $styleWarnings);
+
+        // Initialize ReactiveComponent shared state (AOT requires ChangeQueue)
+        $analyzer = new ScriptAnalyzer();
+        $analyzer->injectDirty('');
+
+        // Parse template (pass registry so ComponentRefNodes are recognized)
+        $parser = new TemplateParser($registry);
+        $app = $parser->parse($template);
+        $layout = $parser->lowerToLayout($app, $classStyles);
+
+        $elements = $layout['elements'];
+        $buttons = $layout['buttons'] ?? [];
+        $bindKeys = $layout['bindKeys'] ?? [];
+        $handlerMap = $layout['handlerMap'] ?? [];
+        $condProps = $layout['condProps'] ?? [];
+
+        // Merge buttons into elements
+        $mergedElements = array_map(function($btn) {
+            $btn['type'] = 'button';
+            return $btn;
+        }, $buttons);
+        $allElements = array_merge($elements, $mergedElements);
+
+        $elementsExport = varExportShort($allElements);
+
+        $classBody = '';
+        $getBindValue = '';
+        if (count($bindKeys) > 0) {
+            foreach ($bindKeys as $key) {
+                $getBindValue .= "        if (\$bindKey === '$key') {\n";
+                $getBindValue .= "            return \$this->$key;\n";
+                $getBindValue .= "        }\n";
+            }
+            $getBindValue .= "        return '';";
+        } else {
+            $getBindValue = "        return '';";
+        }
+
+        $dispatchClick = '';
+        if (count($handlerMap) > 0) {
+            $first = true;
+            foreach ($handlerMap as $handler => $hasArg) {
+                $prefix = $first ? 'if' : 'elseif';
+                $first = false;
+                if ($hasArg) {
+                    $dispatchClick .= "        {$prefix} (\$handler === '$handler') {\n";
+                    $dispatchClick .= "            \$this->$handler(\$btn['arg']);\n";
+                    $dispatchClick .= "        }\n";
+                } else {
+                    $dispatchClick .= "        {$prefix} (\$handler === '$handler') {\n";
+                    $dispatchClick .= "            \$this->$handler();\n";
+                    $dispatchClick .= "        }\n";
+                }
+            }
+        } else {
+            $dispatchClick = "        // No handlers defined";
+        }
+
+        // evalCondition — v6 M3 fix: use explicit if/else per property
+        // AOT 不支持 $this->$prop 变量属性访问，改用显式 if 分支路由
+        $evalCondition = "        return true;";
+        if (count($condProps) > 0) {
+            $condBranches = [];
+            foreach ($condProps as $prop) {
+                $condBranches[] = "if (\$cond['prop'] === '$prop') { " .
+                    "\$v = \$this->$prop; " .
+                    "\$op = \$cond['op'] ?? '==='; " .
+                    "if (\$op === '===' || \$op === '==') return \$v === \$cond['value']; " .
+                    "if (\$op === '!=') return \$v !== \$cond['value']; }";
+            }
+            $evalCondition = "        " . implode(" else ", $condBranches) . " else return false;";
+        }
+
+        $classContent = <<<PHP
+<?php
+
+/**
+ * AUTO-GENERATED by SFC Compiler v6 — DO NOT EDIT
+ * Source: $baseName.vue
+ *
+ * v6 M3: Child component
+ */
+
+use native_types;
+
+class {$className} extends ReactiveComponent
+{
+$classBody
+
+    public function getLayout(): array
+    {
+        return [
+            'elements' => {$elementsExport},
+        ];
+    }
+
+    public function onMount(): void
+    {
+    }
+
+    public function onUnmount(): void
+    {
+    }
+
+    public function getBindValue(string \$bindKey): string
+    {
+        {$getBindValue}
+    }
+
+    public function dispatchClick(array \$btn): void
+    {
+        \$handler = \$btn['handler'] ?? '';
+{$dispatchClick}
+    }
+
+    public function evalCondition(array \$cond): bool
+    {
+{$evalCondition}
+    }
+
+    public function __construct(?string \$componentId = null)
+    {
+        parent::__construct(\$componentId ?? '{$baseName}');
+    }
+}
+PHP;
+
+        $classPath = $outDir . DIRECTORY_SEPARATOR . $className . '.php';
+        $validator = new AotValidator();
+        $classOk = $validator->validate($classContent, $classPath);
+
+        if ($classOk) {
+            file_put_contents($classPath, $classContent);
+            echo "  Generated:  $classPath (" . strlen($classContent) . " bytes)\n";
+        } else {
+            echo "  [ERROR] $className: AOT validation failed\n";
+        }
+    }
+
+    echo "--- Phase 1 complete ---\n\n";
 }
 
 // ============================================================
@@ -194,6 +360,8 @@ function resolveComponentRefsV6(AppNode $app, array &$classStyles, int $depth = 
 // v6 M2: 将 component tag 转换为类名
 function componentTagToComponentName(string $tag): string
 {
+    // Strip "Component" suffix if present (caller passes filename like "AboutDialog")
+    $tag = preg_replace('/Component$/i', '', $tag);
     $parts = explode('-', $tag);
     $result = '';
     foreach ($parts as $i => $part) {
@@ -238,24 +406,30 @@ if (!file_exists($vueFile)) {
 }
 
 $source = file_get_contents($vueFile);
-$baseName = pathinfo($vueFile, PATHINFO_FILENAME);
 
-// Output to gen/ directory relative to the .vue file
+// v5 M2: Load component registry from app's project.yml
+$componentRegistry = loadComponentRegistry($vueFile);
+$componentNames = array_keys($componentRegistry->all());
 $appDir = dirname(realpath($vueFile));
 $outDir = $appDir . DIRECTORY_SEPARATOR . 'gen';
 if (!is_dir($outDir)) {
     mkdir($outDir, 0755, true);
 }
 
-// v5 M2: Load component registry from app's project.yml
-$componentRegistry = loadComponentRegistry($vueFile);
-$componentNames = array_keys($componentRegistry->all());
+$baseName = pathinfo($vueFile, PATHINFO_FILENAME);
 $isRootComponent = (strtolower($baseName) === 'app' || strtolower($baseName) === 'appcomponent');
 
 if (count($componentNames) > 0) {
     echo "SFC Compiler v6: $vueFile (components: " . implode(', ', $componentNames) . ")\n";
 } else {
     echo "SFC Compiler v6: $vueFile\n";
+}
+
+// ============================================================
+// v6 M3: PHASE 1 — Pre-compile all child components to gen/
+// ============================================================
+if ($isRootComponent) {
+    compileChildComponents($componentRegistry, $outDir);
 }
 
 // ============================================================
@@ -484,16 +658,15 @@ PHP;
 
 // v6 M3: registerChildren 已废弃，子组件通过 components 声明管理
 $registerChildrenBody = '';
-$getBaseComponentsBody = '';
 
-// v6 M2: Generate onAttach/onDetach
+// v6 M3: Generate onMount/onUnmount
 $lifecycleMethods = <<<PHP
 
-    public function onAttach(): void
+    public function onMount(): void
     {
     }
 
-    public function onDetach(): void
+    public function onUnmount(): void
     {
     }
 PHP;
@@ -525,11 +698,11 @@ $classContent .= "    public function getLayout(): array\n";
 $classContent .= $getLayoutBody . "\n";
 
 $classContent .= "\n";
-$classContent .= "    public function onAttach(): void\n";
+$classContent .= "    public function onMount(): void\n";
 $classContent .= "    {\n";
 $classContent .= "    }\n";
 $classContent .= "\n";
-$classContent .= "    public function onDetach(): void\n";
+$classContent .= "    public function onUnmount(): void\n";
 $classContent .= "    {\n";
 $classContent .= "    }\n";
 $classContent .= "\n";
@@ -574,206 +747,8 @@ if (!$classOk) {
 file_put_contents($classPath, $classContent);
 echo "  Generated:  $classPath (" . strlen($classContent) . " bytes)\n";
 
-// v6 M2: 如果是根组件，需要生成子组件文件
-if ($isRootComponent && count($childComponentInfo) > 0) {
-    echo "\n--- Generating child component files ---\n";
-
-    foreach ($childComponentInfo as $child) {
-        $childTag = $child['tagName'];
-        $childFile = $componentRegistry->all()[$childTag] ?? '';
-
-        if ($childFile === '' || !file_exists($childFile)) {
-            echo "  [SKIP] $childTag: source file not found\n";
-            continue;
-        }
-
-        $childSource = file_get_contents($childFile);
-        $childBaseName = pathinfo($childFile, PATHINFO_FILENAME);
-        $childClassName = $child['componentClass'];
-
-        // 提取子组件的 template 和 style
-        $childTemplate = '';
-        $childScript = '';
-        $childStyles = '';
-        if (preg_match('#<template[^>]*>(.*?)</template>#s', $childSource, $m)) {
-            $childTemplate = $m[1];
-        }
-        if (preg_match('#<script[^>]*lang=["\']php["\'][^>]*>(.*?)</script>#s', $childSource, $m)) {
-            $childScript = trim($m[1]);
-        }
-        if (preg_match('#<style[^>]*>(.*?)</style>#s', $childSource, $m)) {
-            $childStyles = $m[1];
-        }
-
-        // 解析子组件的样式
-        $childStyleWarnings = [];
-        $childClassStyles = CssMappings::parseStyleBlock($childStyles, $childStyleWarnings);
-
-        // 解析子组件的模板
-        $childParser = new TemplateParser(new ComponentRegistry());
-        $childApp = $childParser->parse($childTemplate);
-
-        // 转换为布局数据
-        $childLayout = $childParser->lowerToLayout($childApp, $childClassStyles);
-        $childElements = $childLayout['elements'];
-        $childButtons = $childLayout['buttons'];
-        $childBindKeys = $childLayout['bindKeys'] ?? [];
-        $childHandlerMap = $childLayout['handlerMap'] ?? [];
-        $childCondProps = $childLayout['condProps'] ?? [];
-
-        // 分析子组件的 script
-        $childAnalyzer = new ScriptAnalyzer();
-        $childClassBody = $childAnalyzer->injectDirty($childScript);
-
-        // 生成子组件的 getBindValue
-        $childGetBindValue = '';
-        if (count($childBindKeys) > 0) {
-            foreach ($childBindKeys as $key) {
-                $childGetBindValue .= "        if (\$bindKey === '$key') {\n";
-                $childGetBindValue .= "            return \$this->$key;\n";
-                $childGetBindValue .= "        }\n";
-            }
-            $childGetBindValue .= "        return '';";
-        } else {
-            $childGetBindValue = "        return '';";
-        }
-
-        // 生成子组件的 dispatchClick
-        $childDispatchClick = '';
-        if (count($childHandlerMap) > 0) {
-            $childDispatchClick .= "        \$handler = \$btn['handler'];\n";
-            $first = true;
-            foreach ($childHandlerMap as $handler => $hasArg) {
-                $prefix = $first ? 'if' : 'elseif';
-                $first = false;
-                if ($hasArg) {
-                    $childDispatchClick .= "        {$prefix} (\$handler === '$handler') {\n";
-                    $childDispatchClick .= "            \$this->$handler(\$btn['arg']);\n";
-                    $childDispatchClick .= "        }\n";
-                } else {
-                    $childDispatchClick .= "        {$prefix} (\$handler === '$handler') {\n";
-                    $childDispatchClick .= "            \$this->$handler();\n";
-                    $childDispatchClick .= "        }\n";
-                }
-            }
-        } else {
-            $childDispatchClick = "        // No handlers defined";
-        }
-
-        // 生成子组件的 evalCondition
-        $childEvalCondition = '';
-        if (count($childCondProps) > 0) {
-            $childEvalCondition .= "        \$prop = \$cond['prop'];\n";
-            $childEvalCondition .= "        \$op = \$cond['op'];\n";
-            $childEvalCondition .= "        if (\$op === 'truthy') {\n";
-            foreach ($childCondProps as $prop) {
-                $childEvalCondition .= "            if (\$prop === '$prop') return \$this->$prop ? true : false;\n";
-            }
-            $childEvalCondition .= "            return false;\n";
-            $childEvalCondition .= "        }\n";
-            $childEvalCondition .= "        if (\$op === 'falsy') {\n";
-            foreach ($childCondProps as $prop) {
-                $childEvalCondition .= "            if (\$prop === '$prop') return \$this->$prop ? false : true;\n";
-            }
-            $childEvalCondition .= "            return false;\n";
-            $childEvalCondition .= "        }\n";
-            $childEvalCondition .= "        if (\$op === '==') {\n";
-            $childEvalCondition .= "            \$value = \$cond['value'];\n";
-            foreach ($childCondProps as $prop) {
-                $childEvalCondition .= "            if (\$prop === '$prop') return \$this->$prop === \$value;\n";
-            }
-            $childEvalCondition .= "            return false;\n";
-            $childEvalCondition .= "        }\n";
-            $childEvalCondition .= "        if (\$op === '!=') {\n";
-            $childEvalCondition .= "            \$value = \$cond['value'];\n";
-            foreach ($childCondProps as $prop) {
-                $childEvalCondition .= "            if (\$prop === '$prop') return \$this->$prop !== \$value;\n";
-            }
-            $childEvalCondition .= "            return false;\n";
-            $childEvalCondition .= "        }\n";
-            $childEvalCondition .= "        return false;";
-        } else {
-            $childEvalCondition = "        return true; // no conditions defined";
-        }
-
-        // 生成子组件的 getLayout (v6 M2: 统一 elements 数组)
-        $childElementsExport = varExportShort($childElements);
-        $childButtonsExport = varExportShort($childButtons);
-        // 合并 buttons 到 elements，添加 type: 'button' 标记
-        $childMergedElements = varExportShort(array_merge($childElements, array_map(function($btn) {
-            $btn['type'] = 'button';
-            return $btn;
-        }, $childButtons)));
-
-        // 组装子组件类
-        $childClassContent = <<<PHP
-<?php
-/**
- * AUTO-GENERATED by SFC Compiler v6 — DO NOT EDIT
- * Source: $childBaseName.vue
- *
- * v6 M2: Child component
- */
-
-use native_types;
-
-class {$childClassName} extends ReactiveComponent
-{
-$childClassBody
-
-    /**
-     * 获取组件布局数据
-     * v6 M2: 统一 elements 数组，按 type 区分 rect/text/button
-     */
-    public function getLayout(): array
-    {
-        return [
-            'elements' => {$childMergedElements},
-        ];
-    }
-
-    public function onAttach(): void
-    {
-    }
-
-    public function onDetach(): void
-    {
-    }
-
-    public function getBindValue(string \$bindKey): string
-    {
-$childGetBindValue
-    }
-
-    public function dispatchClick(array \$btn): void
-    {
-$childDispatchClick
-    }
-
-    public function evalCondition(array \$cond): bool
-    {
-$childEvalCondition
-    }
-
-    public function __construct(?string \$componentId = null)
-    {
-        parent::__construct(\$componentId ?? '{$childBaseName}');
-    }
-}
-PHP;
-
-        // 验证并写入子组件文件
-        $childClassPath = $outDir . DIRECTORY_SEPARATOR . $childClassName . '.php';
-        $childClassOk = $validator->validate($childClassContent, $childClassPath);
-
-        if ($childClassOk) {
-            file_put_contents($childClassPath, $childClassContent);
-            echo "  Generated:  $childClassPath (" . strlen($childClassContent) . " bytes)\n";
-        } else {
-            echo "  [ERROR] $childClassName: AOT validation failed\n";
-        }
-    }
-}
+// v6 M3: 子组件已在 Phase 1 (compileChildComponents) 中生成到 gen/
+// 此处仅保留 childComponentInfo 用于根组件的 components 声明
 
 // v6 M2: 如果是根组件，还需要确保 gen/ 目录有入口文件声明常量
 $windowWidth = $app->width;
@@ -795,24 +770,22 @@ if ($isRootComponent) {
     echo "  Generated:  $constantsPath (" . strlen($constantsContent) . " bytes)\n";
 }
 
-// v6 M3: 扫描 gen/ 目录下所有组件类
+// v6 M3: 扫描 gen/ 目录下所有组件类（Phase 1 已预编译所有子组件）
 $genDir = $appDir . DIRECTORY_SEPARATOR . 'gen';
 $allComponentClasses = [];
 
-// 扫描主组件
+// 根组件（当前正在编译）
 $allComponentClasses[$componentClassName] = true;
-
-// 扫描子组件
-foreach ($childComponentInfo as $child) {
-    $allComponentClasses[$child['componentClass']] = true;
-}
 
 // 扫描 gen/ 目录下所有 *Component.php 文件
 if (is_dir($genDir)) {
     $files = glob($genDir . '/*Component.php');
     foreach ($files as $file) {
         $fileName = basename($file, '.php');
-        $allComponentClasses[$fileName] = true;
+        // 避免重复添加根组件自身
+        if ($fileName !== $componentClassName) {
+            $allComponentClasses[$fileName] = true;
+        }
     }
 }
 

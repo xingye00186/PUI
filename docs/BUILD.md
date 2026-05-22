@@ -1,6 +1,6 @@
 # VueCalc 构建说明
 
-> 最后更新：2026-05-17
+> 最后更新：2026-05-22
 
 本文档说明如何构建 VueCalc 项目。详细技术原理参见 `../swoole compiler AOT 文档/最佳实践.html` 及 `docs/构建编译流程参考.md`。
 
@@ -34,16 +34,25 @@
 
 ### 方式 2：非交互式构建（推荐用于自动化 / CI）
 
-命令行运行 **`build.bat`**，需指定应用名称：
+> **必须使用 PowerShell**：`build.bat` 内部调用 `chcp 65001`，在 cmd/bash 中输出为空，必须通过 PowerShell 调用才能捕获完整输出。
 
-```cmd
-cd /d <框架目录>
-build.bat calculator          :: 仅构建
-build.bat calculator --run    :: 构建后自动运行 3 秒验证
-build.bat test --run          :: 运行 AOT 语法兼容性测试套件（33 项测试），验证编译器对 PHP 动态特性的支持
+```powershell
+powershell -Command "cd 'f:\work\pdv'; & '.\build.bat' calculator 2>&1"
 ```
 
 退出码: 0=成功, 1=参数/前置检查, 2=SFC失败, 3=AOT失败, 4=打包失败, 5=运行崩溃
+
+**构建成功标志**：
+```
+AOT Validation: PASSED (0 errors, 0 warnings)
+Successfully compiled N files
+Build successful: calculator.exe
+[OK] Build completed successfully
+```
+
+**产物**：`f:/work/pdv/apps/calculator/bin/calculator.exe`
+
+**末尾可忽略的非致命信息**：`clang-format not found`（格式化步骤，不影响 EXE）、exit code 非 0（PowerShell 因 clang-format 报错但 EXE 已正确生成）
 
 ### 方式 3：MSYS2 / Git Bash 手动构建
 
@@ -86,9 +95,9 @@ cp "$COMPILER_DIR/phpx.dll" apps/calculator/bin/
 ## 构建管道
 
 ```
-App.vue ──→ [SFC Compiler v6] ──→ gen/*.gen.php ──→ [AOT 编译器] ──→ calculator.exe ──→ [打包] ──→ apps/calculator/bin/
- (apps/calculator/)    (含分段布局 getLayout_X     (apps/calculator/gen/) (PHP→C++→MSVC→exe)              (exe + DLL)
-                        + 兼容聚合器 getLayout)
+App.vue ──→ [SFC Compiler v6] ──→ gen/*Component.php ──→ [AOT 编译器] ──→ calculator.exe ──→ [打包] ──→ apps/calculator/bin/
+ (apps/calculator/)    (每个组件独立文件            (apps/calculator/gen/) (PHP→C++→MSVC→exe)              (exe + DLL)
+                          getLayout + onMount/onUnmount)
 ```
 
 ### Step 1: SFC 编译器
@@ -98,10 +107,9 @@ App.vue ──→ [SFC Compiler v6] ──→ gen/*.gen.php ──→ [AOT 编�
 | 命令 | `php framework/sfc-compiler.php apps/calculator/App.vue` |
 | PHP | 使用 `swoole_compile*` 目录下的 `php.exe`（通配符自动发现） |
 | 输入 | `apps/calculator/App.vue`（template + script + style 三块）+ 嵌套组件 |
-| 组件注册 | SFC 编译器自动读取同目录 `apps/calculator/project.yml` 中的 `components` 映射 |
-| 输出 | `apps/calculator/gen/App.gen.php`、`apps/calculator/gen/AppLayout_gen.php` |
-| 生成函数 | `getLayout_X()` — 各布局段数据函数；`callLayoutSegment(string $name): array` — AOT 安全的布局段分发函数（if/else 显式调用）；`getLayoutSegmentNames(): array` — 返回所有可用布局段名称 |
-| 数组语法 | 生成代码使用 `[]` 短数组语法（通过 `varExportShort()` 替代 `var_export()`） |
+| 组件注册 | SFC 编译器自动扫描 `apps/calculator/components/` 目录下的 `*.vue` 文件 |
+| 输出 | `apps/calculator/gen/AppComponent.php`、`apps/calculator/gen/DisplayPanelComponent.php` 等（每个组件独立文件） |
+| 生成函数 | `getLayout()` — 布局数据函数；`onMount()`/`onUnmount()` — 生命周期回调 |
 | 特性 | 标准 PHP CLI 脚本，不经过 AOT；支持嵌套组件解析与布局内联 (v5 M2) |
 
 ### Step 2: AOT 编译器
@@ -150,17 +158,17 @@ App.vue ──→ [SFC Compiler v6] ──→ gen/*.gen.php ──→ [AOT 编�
 
 ### Q: 双击 build.bat 闪退？
 
-`build.bat` 现在需要参数（应用名称），双击会显示 Usage 后退出。请改用命令行运行：
+`build.bat` 需要参数（应用名称），双击会显示 Usage 后退出。请改用命令行或 PowerShell：
 
-```cmd
-cd /d <框架目录>
-build.bat calculator
+```powershell
+powershell -Command "cd 'f:\work\pdv'; & '.\build.bat' calculator 2>&1"
 ```
 
 如需交互式选择应用，请双击 `main_build.bat`。
 
 常见构建失败原因：
-- Visual Studio 2026 未安装或安装路径不是默认位置 → 修改 main_build.bat 中的 `VCVARSALL` 路径
+- Visual Studio 2026 未安装或安装路径不是默认位置 → 修改 build.bat 中的 `VCVARSALL` 路径
+- 构建后看不到输出 → 必须用 PowerShell，cmd/bash 中 `build.bat` 输出为空
 - 未找到 swoole_compile* 目录 → 确保 swoole_compiler 文件夹与框架在同一父目录下
 - vcvarsall.bat 执行失败 → 确认安装了 C++ 桌面开发工作负载
 
@@ -178,8 +186,7 @@ MSVC 编译器环境未初始化。双击 build.bat 会自动调用 vcvarsall.ba
 
 检查以下项目：
 - Calculator.vue 是否包含完整的三个块：`<template>` / `<script lang="php">` / `<style>`
-- 嵌套组件 (`<display-panel>` 等) 对应的 `.vue` 文件是否存在于 `components/` 目录
-- `apps/calculator/project.yml` 中 `components` 注册表是否正确
+- 嵌套组件 (`<display-panel>` 等) 对应的 `.vue` 文件是否存在于 `components/` 目录（SFC 编译器 v6 M3 自动扫描）
 
 ### Q: AOT 编译器报错？
 
@@ -193,9 +200,13 @@ MSVC 编译器环境未初始化。双击 build.bat 会自动调用 vcvarsall.ba
 | `error C3927` | 文件名含点号 | 改用下划线 |
 | `找不到 php8embed.lib` | SDK/lib/ 路径未被搜索 | 脚本已自动处理；或手动复制到编译器根目录 |
 
-### Q: MSYS2 中运行 build.bat 没反应？
+### Q: MSYS2 / bash 中运行 build.bat 没反应？
 
-这是 MSYS2 的已知限制 (PATH 转换问题)。请使用上面"方式 2"的手动构建命令。
+这是因为 `build.bat` 内部调用 `chcp 65001` 切换代码页，在 bash/cmd/msys2 中会导致输出为空。**必须使用 PowerShell**：
+
+```powershell
+powershell -Command "cd 'f:\work\pdv'; & '.\build.bat' calculator 2>&1"
+```
 
 ### Q: 根目录 main.php 去哪了？开发时如何运行？
 
@@ -272,16 +283,20 @@ chcp 65001
     │   ├── main.php               ← [AOT 入口] 应用启动逻辑
     │   ├── Application.php        ← 窗口/事件循环控制器
     │   ├── App.vue                ← [源] SFC 单文件组件 (主入口)
-    │   ├── project.yml            ← 应用级配置 (组件注册表, v5 M2)
+    │   ├── project.yml            ← 应用级 AOT 配置
     │   ├── components/
     │   │   ├── DisplayPanel.vue   ← 可复用子组件 (v5 M2)
     │   │   ├── NumPad.vue         ← 可复用子组件 (v5 M2)
     │   │   └── AboutDialog.vue    ← 弹窗子组件 (v5 M3: overlay 分层)
     │   ├── gen/                   ← [自动生成] SFC 编译器输出
-    │   │   ├── App.gen.php
-    │   │   └── AppLayout_gen.php
+    │   │   ├── AppComponent.php     ← 根组件 (getLayout + onMount/onUnmount)
+    │   │   ├── DisplayPanelComponent.php
+    │   │   ├── NumPadComponent.php
+    │   │   ├── AboutDialogComponent.php
+    │   │   ├── ComponentFactory.php
+    │   │   └── constants.php
     │   └── bin/                   ← [构建产物] 可分发包 (每个 app 独立)
-    │       ├── calculator.exe     ← 计算器主程序 (~360KB)
+    │       ├── calculator.exe     ← 计算器主程序 (~580KB)
     │       ├── php8ts.dll         ← PHP 8 运行时 (~11MB)
     │       └── phpx.dll           ← PHPX 桥接库 (~2MB)
     ├── stub/

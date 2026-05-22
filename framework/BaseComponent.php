@@ -27,9 +27,6 @@ abstract class BaseComponent implements ComponentInterface
     /** 组件配置属性 (x, y, z 等偏移量) */
     protected array $props = [];
 
-    /** 是否已挂载 */
-    protected bool $attached = false;
-
     public function __construct(string $id = '')
     {
         $this->id = $id;
@@ -99,79 +96,14 @@ abstract class BaseComponent implements ComponentInterface
     public function removeChild(string $childId): void
     {
         if (isset($this->children[$childId])) {
-            $this->children[$childId]->onDetach();
+            $this->children[$childId]->onUnmount();
             unset($this->children[$childId]);
         }
-    }
-
-    /**
-     * 检查组件是否已挂载
-     */
-    public function isAttached(): bool
-    {
-        return $this->attached;
-    }
-
-    /**
-     * 标记组件已挂载（由 Application 调用）
-     */
-    public function markAttached(): void
-    {
-        $this->attached = true;
-    }
-
-    /**
-     * 标记组件已卸载（由 Application 调用）
-     */
-    public function markDetached(): void
-    {
-        $this->attached = false;
-    }
-
-    /**
-     * 获取所有后代的列表（深度优先）
-     * AOT 兼容: 使用 for 循环代替 foreach
-     *
-     * @return ComponentInterface[]
-     */
-    public function getAllDescendants(): array
-    {
-        $result = [];
-        $this->collectDescendants($this, $result);
-        return $result;
-    }
-
-    private function collectDescendants(ComponentInterface $comp, array &$result): void
-    {
-        $children = $comp->getChildren();
-        $childIds = array_keys($children);
-        $count = count($childIds);
-        for ($i = 0; $i < $count; $i++) {
-            $child = $children[$childIds[$i]];
-            $result[] = $child;
-            $this->collectDescendants($child, $result);
-        }
-    }
-
-    /**
-     * 获取初始组件树（包含自身和所有后代）
-     * 用于 Application 初始化挂载
-     *
-     * @return ComponentInterface[]
-     */
-    public function getBaseComponents(): array
-    {
-        $result = [$this];
-        $descendants = $this->getAllDescendants();
-        foreach ($descendants as $desc) {
-            $result[] = $desc;
-        }
-        return $result;
     }
 
     // ===== 子类必须实现的方法 =====
 
     abstract public function getLayout(): array;
-    abstract public function onAttach(): void;
-    abstract public function onDetach(): void;
+    abstract public function onMount(): void;
+    abstract public function onUnmount(): void;
 }

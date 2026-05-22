@@ -41,46 +41,19 @@ class Application
 
     /**
      * 初始化渲染器
-     * v6 M2: 从根组件获取初始组件树并挂载
+     * v6 M3: 直接挂载根组件（静态子组件树已废弃，动态组件由 collectLayoutRecursive 管理）
      */
     public function initRenderer(): bool
     {
-        // v6 M2: 从根组件获取初始组件树并挂载
         if ($this->rootComponent !== null) {
-            $this->attachComponents($this->rootComponent->getBaseComponents());
+            $id = $this->rootComponent->getId();
+            $this->activeComponents[$id] = $this->rootComponent;
+            $this->rootComponent->onMount();
         }
 
-        // v6 M2: 创建渲染器（hWnd 由 ctx 持有）
         $this->renderer = new BaseRenderer($this->rootComponent, $this->ctx);
 
         return true;
-    }
-
-    /**
-     * 批量挂载组件到活跃列表
-     * @param array $components ComponentInterface[]
-     */
-    private function attachComponents(array $components): void
-    {
-        foreach ($components as $comp) {
-            if ($comp instanceof ComponentInterface) {
-                $id = $comp->getId();
-                $this->activeComponents[$id] = $comp;
-                $comp->onAttach();
-            }
-        }
-    }
-
-    /**
-     * 从活跃列表卸载组件
-     * @param string $id 组件标识
-     */
-    public function detachComponent(string $id): void
-    {
-        if (isset($this->activeComponents[$id])) {
-            $this->activeComponents[$id]->onDetach();
-            unset($this->activeComponents[$id]);
-        }
     }
 
     /**
@@ -104,7 +77,7 @@ class Application
 
         $id = $comp->getId();
         $this->activeComponents[$id] = $comp;
-        $comp->onAttach();
+        $comp->onMount();
 
         // 设置父子关系
         if (method_exists($comp, 'setParent')) {
@@ -124,7 +97,7 @@ class Application
         $key = $comp->getProps()['_poolKey'] ?? $id;
 
         if (isset($this->activeComponents[$id])) {
-            $comp->onDetach();
+            $comp->onUnmount();
             unset($this->activeComponents[$id]);
         }
 

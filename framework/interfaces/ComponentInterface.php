@@ -56,10 +56,10 @@ interface ComponentInterface
     /**
      * 组件挂载回调
      */
-    public function onAttach(): void;
+    public function onMount(): void;
 
     /**
      * 组件卸载回调
      */
-    public function onDetach(): void;
+    public function onUnmount(): void;
 }
