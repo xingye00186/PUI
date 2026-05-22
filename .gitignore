@@ -7,3 +7,5 @@ vendor/
 *.dll
 swoole_compiler*
 nul
+*.ilk
+*.pdb
