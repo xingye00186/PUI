@@ -30,14 +30,14 @@ class Application
     {
         $this->rootComponent = $root;
         $this->ctx = $ctx;
-        $this->initRender();
+        $this->initRenderer();
     }
 
     /**
      * 初始化渲染器
      * v6 M2: 从根组件获取初始组件树并挂载
      */
-    public function initRender(): bool
+    public function initRenderer(): bool
     {
         // v6 M2: 从根组件获取初始组件树并挂载
         if ($this->rootComponent !== null) {
