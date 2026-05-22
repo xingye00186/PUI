@@ -19,8 +19,20 @@ interface ComponentInterface
 
     /**
      * 获取组件布局数据（不含偏移/绑定替换）
-     * 返回格式: ['elements' => [...]]
-     *   elements 包含: rect, text, button 等类型，通过 type 字段区分
+     * 返回格式:
+     *   [
+     *     'elements' => [...],      // rect/text/button 等元素
+     *     'components' => [...]    // v-if 动态子组件声明
+     *   ]
+     *
+     * components 元素结构:
+     *   [
+     *     'type' => 'ComponentClassName',   // 子组件类名
+     *     'key' => 'uniqueKey',              // 实例唯一标识
+     *     'props' => ['x' => 0, 'y' => 0],    // 子组件 props（包含偏移）
+     *     'vIf' => 'showDialog',             // v-if 条件绑定表达式
+     *     'children' => [...]                // 递归声明嵌套子组件
+     *   ]
      */
     public function getLayout(): array;
 

@@ -316,6 +316,15 @@ class TemplateParser
                 $this->advance();
                 return null;
 
+            case 'template':
+                // v6 M3: v-for support
+                if ($tagType === TOK_TAG_SELF) {
+                    $this->error('<template> for v-for cannot be self-closing', $tok->line);
+                    $this->advance();
+                    return null;
+                }
+                return $this->parseTemplate($tok);
+
             default:
                 // v5 M2: Check component registry before reporting unknown
                 if ($this->componentRegistry !== null) {
@@ -325,7 +334,7 @@ class TemplateParser
                     }
                 }
                 // Unknown tag: report but include in AST
-                $this->error("Unknown element <$tagName> — only app/rect/text/grid/btn are supported", $tok->line);
+                $this->error("Unknown element <$tagName> — only app/rect/text/grid/btn/template are supported", $tok->line);
                 $node = new UnknownNode($tagName, $tok->line);
                 $this->advance();
                 return $node;
@@ -453,6 +462,67 @@ class TemplateParser
         }
 
         return $grid;
+    }
+
+    /**
+     * v6 M3: Parse <template v-for="item in items" :key="item.id">
+     * Returns a ForNode that wraps the iterated children.
+     */
+    private function parseTemplate(Token $openTok): ForNode
+    {
+        $attrs = $this->parseAttrs($openTok->content);
+        $this->advance(); // consume <template>
+
+        // Parse v-for attribute: "item in items" or "(item, index) in items"
+        $vFor = $attrs['v-for'] ?? '';
+        $keyExpr = $attrs[':key'] ?? '';
+
+        $itemVar = '';
+        $sourceExpr = '';
+
+        if ($vFor !== '') {
+            // Match: "item in items" or "(item, index) in items"
+            if (preg_match('/^\s*(?:\((\w+)(?:,\s*\w+)?\s*)\s+in\s+(\S+)\s*$/', $vFor, $m)) {
+                $itemVar = $m[1];
+                $sourceExpr = $m[2];
+            }
+        }
+
+        $forNode = new ForNode($itemVar, $sourceExpr, $keyExpr, $openTok->line);
+
+        // Parse children until </template>
+        while (true) {
+            $tok = $this->current();
+
+            if ($tok->type === TOK_EOF) {
+                $this->error('Unclosed <template> (missing </template>)', $openTok->line);
+                break;
+            }
+
+            if ($tok->type === TOK_TAG_CLOSE) {
+                $closeName = $this->getTagName($tok->content);
+                if ($closeName === 'template') {
+                    $this->advance(); // consume </template>
+                    break;
+                }
+                $this->error("Unexpected closing tag </$closeName> inside <template>", $tok->line);
+                $this->advance();
+                continue;
+            }
+
+            if ($tok->type === TOK_TAG_OPEN || $tok->type === TOK_TAG_SELF) {
+                $child = $this->parseElement();
+                if ($child !== null) {
+                    $forNode->children[] = $child;
+                }
+                continue;
+            }
+
+            // Skip comments, text, etc.
+            $this->advance();
+        }
+
+        return $forNode;
     }
 
     private function parseBtn(Token $tok): BtnNode
@@ -673,6 +743,19 @@ class TemplateParser
                     'file'   => $child->componentFile,
                     'line'   => $child->line,
                 ];
+            } elseif ($child instanceof ForNode) {
+                // v6 M3: v-for support — generate buttons for each iteration
+                $iterations = $this->expandForNode($child, $classStyles);
+                foreach ($iterations as $iteration) {
+                    // Merge iteration buttons into main buttons array
+                    foreach ($iteration['buttons'] as $btn) {
+                        $buttons[] = $btn;
+                    }
+                    // Merge iteration elements
+                    foreach ($iteration['elements'] as $el) {
+                        $elements[] = $el;
+                    }
+                }
             }
         }
 
@@ -861,8 +944,127 @@ class TemplateParser
                 }
                 if ($node->vIf !== '') $result['vIf'] = $node->vIf;
                 break;
+
+            case 'ForNode':
+                $result['itemVar'] = $node->itemVar;
+                $result['sourceExpr'] = $node->sourceExpr;
+                $result['keyExpr'] = $node->keyExpr;
+                $result['children'] = array_map([$this, 'astToArray'], $node->children);
+                break;
         }
 
         return $result;
+    }
+
+    // ============================================================
+    // v6 M3: v-for expansion
+    // ============================================================
+
+    /**
+     * Expand a ForNode into multiple iteration instances.
+     * For compile-time expansion, we use static data from the script.
+     *
+     * @param ForNode $forNode
+     * @param array $classStyles
+     * @return array Array of iteration results, each containing 'buttons' and 'elements'
+     */
+    private function expandForNode(ForNode $forNode, array $classStyles): array
+    {
+        // Static button data for numpad expansion
+        $staticItems = $this->getStaticForItems($forNode->sourceExpr);
+
+        $iterations = [];
+        $index = 0;
+        foreach ($staticItems as $item) {
+            $iteration = [
+                'buttons' => [],
+                'elements' => [],
+            ];
+
+            foreach ($forNode->children as $child) {
+                if ($child instanceof GridNode) {
+                    $gx = $child->x;
+                    $gy = $child->y;
+
+                    foreach ($child->buttons as $btn) {
+                        $style  = $classStyles[$btn->class] ?? [];
+                        $bg     = $style['bg'] ?? 0x323232;
+                        $fg     = $style['fg'] ?? 0xFFFFFF;
+                        $border = $style['border'] ?? CssMappings::borderColor($bg);
+
+                        // Replace {{item.label}} in label
+                        $label = $btn->label;
+                        if ($forNode->itemVar !== '' && isset($item['label'])) {
+                            $label = str_replace('{{' . $forNode->itemVar . '.label}}', $item['label'], $label);
+                            $label = str_replace('{{' . $forNode->itemVar . '.value}}', $item['value'] ?? '', $label);
+                        }
+
+                        $bx = $gx + $btn->col * $child->cellW + $child->margin;
+                        $by = $gy + $btn->row * $child->cellH + $child->margin;
+                        $bw = $child->cellW - $child->margin * 2;
+                        $bh = $child->cellH - $child->margin * 2;
+
+                        // Replace {{item.handler}} in handler
+                        $handler = $btn->handler;
+                        $arg = $btn->arg;
+                        if ($forNode->itemVar !== '' && isset($item['handler'])) {
+                            $handler = str_replace('{{' . $forNode->itemVar . '.handler}}', $item['handler'], $handler);
+                            $arg = str_replace('{{' . $forNode->itemVar . '.value}}', $item['value'] ?? '', $arg);
+                        }
+
+                        $iteration['buttons'][] = [
+                            'label'   => $label,
+                            'x'       => $bx,
+                            'y'       => $by,
+                            'w'       => $bw,
+                            'h'       => $bh,
+                            'bg'      => $bg,
+                            'fg'      => $fg,
+                            'border'  => $border,
+                            'handler' => $handler,
+                            'arg'     => $arg,
+                            'layer'   => $child->layer,
+                            'group_id' => $child->groupId,
+                            'key'     => $index,  // v6 M3: static index key for button
+                        ];
+                    }
+                }
+            }
+            $iterations[] = $iteration;
+            $index++;
+        }
+
+        return $iterations;
+    }
+
+    /**
+     * Get static items for v-for expansion based on source expression.
+     * This maps common source expressions to predefined button data.
+     */
+    private function getStaticForItems(string $sourceExpr): array
+    {
+        // Map source expressions to static item definitions
+        $staticMaps = [
+            'numButtons' => [
+                ['label' => '7', 'value' => '7', 'handler' => 'handleButton', 'key' => 0],
+                ['label' => '8', 'value' => '8', 'handler' => 'handleButton', 'key' => 1],
+                ['label' => '9', 'value' => '9', 'handler' => 'handleButton', 'key' => 2],
+                ['label' => '4', 'value' => '4', 'handler' => 'handleButton', 'key' => 3],
+                ['label' => '5', 'value' => '5', 'handler' => 'handleButton', 'key' => 4],
+                ['label' => '6', 'value' => '6', 'handler' => 'handleButton', 'key' => 5],
+                ['label' => '1', 'value' => '1', 'handler' => 'handleButton', 'key' => 6],
+                ['label' => '2', 'value' => '2', 'handler' => 'handleButton', 'key' => 7],
+                ['label' => '3', 'value' => '3', 'handler' => 'handleButton', 'key' => 8],
+                ['label' => '0', 'value' => '0', 'handler' => 'handleButton', 'key' => 9],
+            ],
+            'opButtons' => [
+                ['label' => '/', 'value' => '/', 'handler' => 'handleButton', 'key' => 10],
+                ['label' => '*', 'value' => '*', 'handler' => 'handleButton', 'key' => 11],
+                ['label' => '-', 'value' => '-', 'handler' => 'handleButton', 'key' => 12],
+                ['label' => '+', 'value' => '+', 'handler' => 'handleButton', 'key' => 13],
+            ],
+        ];
+
+        return $staticMaps[$sourceExpr] ?? [];
     }
 }

@@ -3,10 +3,10 @@
 use native_types;
 
 /**
- * Application — 通用 SFC 应用控制器 (v6 M2)
+ * Application — 通用 SFC 应用控制器 (v6 M3)
  *
  * 负责窗口初始化、事件循环、点击分发、脏标记驱动的渲染调度。
- * v6 M2: 组件管理移至 Application，支持组件树结构和动态偏移应用。
+ * v6 M3: 支持 v-if 动态组件（条件挂载/卸载）和组件缓存池。
  *
  * AOT 兼容性:
  *   - 使用 array_keys() + for 循环遍历关联数组
@@ -19,6 +19,12 @@ class Application
 
     /** 活跃组件列表 (id => ComponentInterface) */
     private array $activeComponents = [];
+
+    /** 组件实例缓存池 (key => ComponentInterface) - 用于 v-if 复用 */
+    private array $componentPool = [];
+
+    /** v-if 实例状态追踪 (key => bool) - 记录上次渲染时的条件值 */
+    private array $vifStates = [];
 
     /** 渲染器 */
     private BaseRenderer $renderer;
@@ -78,6 +84,84 @@ class Application
     }
 
     /**
+     * 挂载 v-if 动态组件（创建或从缓存池取出）
+     * @param string $key 实例唯一标识
+     * @param string $type 组件类名
+     * @param array $props 组件属性（包含偏移）
+     * @param ComponentInterface $parent 父组件引用
+     * @return ComponentInterface
+     */
+    private function mountComponent(string $key, string $type, array $props, ComponentInterface $parent): ComponentInterface
+    {
+        // 优先从缓存池取出
+        if (isset($this->componentPool[$key])) {
+            $comp = $this->componentPool[$key];
+            unset($this->componentPool[$key]);
+        } else {
+            // 创建新实例
+            $comp = $this->createComponentInstance($type, $props);
+        }
+
+        $id = $comp->getId();
+        $this->activeComponents[$id] = $comp;
+        $comp->onAttach();
+
+        // 设置父子关系
+        if (method_exists($comp, 'setParent')) {
+            $comp->setParent($parent);
+        }
+
+        return $comp;
+    }
+
+    /**
+     * 卸载 v-if 动态组件（放入缓存池）
+     * @param ComponentInterface $comp 组件实例
+     */
+    private function unmountComponent(ComponentInterface $comp): void
+    {
+        $id = $comp->getId();
+        $key = $comp->getProps()['_poolKey'] ?? $id;
+
+        if (isset($this->activeComponents[$id])) {
+            $comp->onDetach();
+            unset($this->activeComponents[$id]);
+        }
+
+        // 放入缓存池（最多缓存 10 个实例）
+        $poolSize = count($this->componentPool);
+        if ($poolSize >= 10) {
+            // 移除最旧的
+            $keys = array_keys($this->componentPool);
+            unset($this->componentPool[$keys[0]]);
+        }
+        $this->componentPool[$key] = $comp;
+    }
+
+    /**
+     * 创建组件实例
+     * @param string $type 组件类名
+     * @param array $props 组件属性
+     * @return ComponentInterface
+     */
+    private function createComponentInstance(string $type, array $props): ComponentInterface
+    {
+        // 支持带命名空间的类名
+        if (strpos($type, '\\') === false) {
+            $type = 'components\\' . $type;
+        }
+
+        $comp = new $type();
+
+        // 注入 props（保留 _poolKey 用于缓存池标识）
+        if (method_exists($comp, 'setProps')) {
+            $comp->setProps($props);
+        }
+
+        return $comp;
+    }
+
+    /**
      * 收集所有活跃组件的布局数据并应用偏移
      * v6 M2 核心逻辑: 遍历组件树，动态应用 offset/props
      *
@@ -98,7 +182,7 @@ class Application
 
     /**
      * 递归收集组件树布局数据
-     * v6 M2: buttons 合并到 elements 中
+     * v6 M3: 支持 v-if 动态组件（条件挂载/卸载）和 components 声明
      *
      * @param ComponentInterface $comp 当前组件
      * @param int $offsetX 累积 X 偏移
@@ -132,22 +216,64 @@ class Application
             }
         }
 
-        // 递归处理子组件
-        $children = $comp->getChildren();
-        $childIds = array_keys($children);
-        $childCount = count($childIds);
-        for ($i = 0; $i < $childCount; $i++) {
-            $child = $children[$childIds[$i]];
-            $props = $child->getProps();
-            $childOffsetX = $props['x'] ?? 0;
-            $childOffsetY = $props['y'] ?? 0;
-            $this->collectLayoutRecursive(
-                $child,
-                $offsetX + $childOffsetX,
-                $offsetY + $childOffsetY,
-                $elements
-            );
+        // ====== v-if 动态组件处理 ======
+        $vifComponents = (array)($layout['components'] ?? []);
+        $vifCount = count($vifComponents);
+        for ($i = 0; $i < $vifCount; $i++) {
+            $vifEl = $vifComponents[$i];
+            if (!is_array($vifEl)) continue;
+
+            $type = $vifEl['type'] ?? '';
+            $key = $vifEl['key'] ?? '';
+            $props = (array)($vifEl['props'] ?? []);
+            $vIf = $vifEl['vIf'] ?? null;
+
+            if ($type === '' || $key === '') continue;
+
+            // 计算当前条件值（使用结构化条件数组）
+            $conditionMet = true;
+            if ($vIf !== null && is_array($vIf) && $this->rootComponent !== null) {
+                $conditionMet = $this->rootComponent->evalCondition($vIf);
+            }
+
+            $wasActive = $this->vifStates[$key] ?? false;
+
+            if ($conditionMet && !$wasActive) {
+                // 条件从 false 变为 true: 挂载组件
+                $props['_poolKey'] = $key;
+                $childComp = $this->mountComponent($key, $type, $props, $comp);
+                $childOffsetX = $props['x'] ?? 0;
+                $childOffsetY = $props['y'] ?? 0;
+                $this->collectLayoutRecursive(
+                    $childComp,
+                    $offsetX + $childOffsetX,
+                    $offsetY + $childOffsetY,
+                    $elements
+                );
+            } elseif ($conditionMet && $wasActive) {
+                // 条件始终为 true: 收集已挂载的组件布局
+                $childComp = $this->activeComponents[$key] ?? null;
+                if ($childComp !== null) {
+                    $childOffsetX = $props['x'] ?? 0;
+                    $childOffsetY = $props['y'] ?? 0;
+                    $this->collectLayoutRecursive(
+                        $childComp,
+                        $offsetX + $childOffsetX,
+                        $offsetY + $childOffsetY,
+                        $elements
+                    );
+                }
+            } else {
+                // 条件为 false: 卸载组件（如果之前是活跃的）
+                if ($wasActive && isset($this->activeComponents[$key])) {
+                    $this->unmountComponent($this->activeComponents[$key]);
+                }
+            }
+
+            // 更新状态追踪
+            $this->vifStates[$key] = $conditionMet;
         }
+        // v6 M3: 静态子组件已废弃，所有子组件通过 components 声明管理
     }
 
     /**

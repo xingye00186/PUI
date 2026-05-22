@@ -164,10 +164,49 @@ class UnknownNode extends TemplateNode
 }
 
 /**
+ * v6 M3: Represents a v-for loop wrapper in the template.
+ *
+ * e.g., <template v-for="item in items" :key="item.id">
+ *
+ * Contains a source template that will be instantiated for each iteration.
+ */
+class ForNode extends TemplateNode
+{
+    /** Iterator variable name, e.g. 'item' */
+    public string $itemVar;
+
+    /** Source expression, e.g. 'items' */
+    public string $sourceExpr;
+
+    /** Dynamic :key attribute value, e.g. 'item.id' */
+    public string $keyExpr;
+
+    /** Child nodes to be repeated */
+    /** @var TemplateNode[] */
+    public array $children = [];
+
+    /** For v-for loop: collect expanded copies here */
+    /** @var TemplateNode[][] */
+    public array $iterations = [];
+
+    public function __construct(
+        string $itemVar,
+        string $sourceExpr,
+        string $keyExpr,
+        int $line = 0
+    ) {
+        parent::__construct($line);
+        $this->itemVar = $itemVar;
+        $this->sourceExpr = $sourceExpr;
+        $this->keyExpr = $keyExpr;
+    }
+}
+
+/**
  * v5 M2: Represents a child component reference in the template.
- * 
+ *
  * e.g., <display-panel x="0" y="80" :value="display" />
- * 
+ *
  * The sfc-compiler resolves these at compile-time by recursively
  * compiling the referenced .vue file and inlining its layout elements.
  */
