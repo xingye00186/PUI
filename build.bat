@@ -172,6 +172,26 @@ echo   [OK] cl.exe available
 echo.
 
 :: ====================================================================
+:: Step 0.5: AOT 静态检查
+:: ====================================================================
+echo ========================================
+echo   Step 0.5: AOT 静态检查
+echo ========================================
+echo.
+
+cd /d "%FRAMEWORK_ROOT%"
+"%PHP_CLI%" framework\aot-checker.php --project "%APP_DIR%" --skip direct_cpp_call
+set "CHECK_EXIT=!errorlevel!"
+if !CHECK_EXIT! neq 0 (
+    echo.
+    echo [错误] AOT Checker 发现问题，中止构建
+    echo   请修复上述错误后重新构建
+    exit /b 1
+)
+echo   [完成] AOT 静态检查通过
+echo.
+
+:: ====================================================================
 :: Step 1: SFC 编译 (仅含 .vue 文件时)
 :: ====================================================================
 if "%HAS_VUE%"=="0" goto :skip_sfc

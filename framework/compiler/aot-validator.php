@@ -1,18 +1,20 @@
 <?php
 /**
  * AOT Compatibility Validator
- * 
+ *
  * Checks generated PHP code for patterns known to cause Swoole AOT compiler failures.
  * Runs BEFORE writing .gen.php files to disk.
- * 
+ *
  * Based on v2实战经验 (see VueCalc技术规划文档_v3.html §4.1):
  *   1. Filename must not contain extra dots (→ invalid C++ symbol names)
  *   2. No const arrays with nested structures (→ global constant not registered)
- *   3. No variable property access ($obj->$var)
- *   4. No variable method calls ($obj->$method())
+ *   3. No variable property access (property chain ->$var)
+ *   4. No variable method calls (property chain ->$method())
  *   5. No PHP8-only functions (str_contains → use strpos)
  *   6. All code must be inside a class or function (no top-level executable statements in gen files)
  *   7. No variable function calls ($fn() — AOT type inference fails)
+ *
+ * v6 M2 更新: 扩展 Rule 3/4 以检测属性链中的动态访问 (如 $this->prop->$var)
  */
 
 class AotValidator
@@ -68,19 +70,23 @@ class AotValidator
         }
 
         // ============================================================
-        // Rule 3: No variable property access $obj->$var
+        // Rule 3: No variable property access ->$var (including property chains)
         // ============================================================
-        if (preg_match('/\$\w+->\$\w+/', $code, $matches)) {
-            $this->errors[] = "AOT: Variable property access detected ('{$matches[0]}'). " .
-                "AOT does not support \$obj->\$var. Use explicit if/else mapping instead.";
+        // 扩展检测: 不仅匹配 $obj->$var，还匹配 $this->prop->$var 等嵌套链
+        if (preg_match('/->\$\w+(?!\s*\()/s', $code)) {
+            $this->errors[] = "AOT: Variable property access detected (->$var). " .
+                "AOT does not support property chain ->$var. " .
+                "Use explicit if/else mapping instead.";
         }
 
         // ============================================================
-        // Rule 4: No variable method calls $obj->$method()
+        // Rule 4: No variable method calls ->$method() (including property chains)
         // ============================================================
-        if (preg_match('/\$\w+->\$\w+\s*\(/', $code, $matches)) {
-            $this->errors[] = "AOT: Variable method call detected ('{$matches[0]}'). " .
-                "AOT does not support \$obj->\$method(). Use explicit if/else routing instead.";
+        // 扩展检测: 不仅匹配 $obj->$method()，还匹配 $this->prop->$method() 等
+        if (preg_match('/->\$\w+\s*\(/s', $code)) {
+            $this->errors[] = "AOT: Variable method call detected (->$method()). " .
+                "AOT does not support property chain ->$method(). " .
+                "Use explicit if/else routing instead.";
         }
 
         // ============================================================

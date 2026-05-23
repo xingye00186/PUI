@@ -373,10 +373,10 @@ any(mixed $value): mixed
 ### 新建文件 (4 个)
 - `framework/interfaces/ComponentInterface.php`
 - `framework/BaseComponent.php`
-- `framework/AntiPatternChecker.php` - 反模式检查工具
+- `framework/aot-checker.php` - AOT 兼容性全面检查工具 (v6 M3) ← 合并了 AntiPatternChecker
 - `framework/FocusManager.php` - 焦点系统管理器 (v6 M5)
 
-### 修改文件 (10 个)
+### 修改文件 (9 个)
 - `framework/ReactiveComponent.php`
 - `framework/BaseRenderer.php`
 - `framework/Application.php` - 从 apps/calculator 迁移到 framework
@@ -421,11 +421,49 @@ any(mixed $value): mixed
 
 ---
 
-## AOT 兼容性要点
+## AOT 兼容性要点（AI 必须严格遵守）
 
-### 1. 关联数组遍历
+> 以下规则适用于所有框架代码和应用代码。违反这些规则的代码将导致 AOT 编译失败或运行时崩溃。
+> 使用 `php framework/aot-checker.php --project <项目名>` 检查代码。
+
+### any() 函数是 AOT 内置函数
+
+`any()` 是 Swoole Compiler AOT 环境的内置函数，用于**丢弃变量类型推断**：
+
 ```php
-// ❌ AOT 不安全 (foreach 遍历关联数组 key 类型推断错误)
+any(mixed $value): mixed
+```
+
+**正确用法**（ComponentFactory 中）：
+```php
+switch ($className) {
+    case 'AppComponent':
+        $comp = any(new AppComponent());
+        break;
+    case 'DisplayPanelComponent':
+        $comp = any(new DisplayPanelComponent());
+        break;
+}
+```
+
+### AOT 禁止规则清单
+
+| 规则 | 说明 | 示例 |
+|------|------|------|
+| `$$var` | 可变变量 | `$$varName` |
+| `->$var` | 动态属性访问 | `$obj->$propName` |
+| `->$method()` | 动态方法调用 | `$obj->$method()` |
+| `$fn()` | 可变函数 | `$fn()` |
+| `extract()` | 动态变量注入 | `extract($data)` |
+| `yield` | 生成器 | `yield $value` |
+| `eval/include` | 动态加载 | `eval($code)` |
+| `__get/__set` | 魔术方法 | 声明属性替代 |
+| `\0` 字符串 | null 字节 | `"\0"` |
+
+### 关联数组遍历
+
+```php
+// ❌ AOT 可能类型推断错误
 foreach ($this->activeLayouts as $name => $val) { }
 
 // ✅ AOT 安全
@@ -436,27 +474,20 @@ for ($i = 0; $i < $count; $i++) {
 }
 ```
 
-### 2. 嵌套数组类型保留
-```php
-// ❌ AOT 可能丢失子数组类型
-foreach ($seg['elements'] as $el) { }
+### 子组件变量命名规范
 
-// ✅ AOT 安全
-foreach ((array)$seg['elements'] as $el) { }
+```php
+// ❌ AOT 编译失败: Cannot re-assign typed object
+$child = new DisplayPanelComponent('display-panel');
+$child = new NumPadComponent('num-pad');  // 类型冲突!
+
+// ✅ AOT 安全: 使用 addChild() 直接传入
+$this->addChild(new DisplayPanelComponent('display-panel'), ['x' => 4, 'y' => 4]);
+$this->addChild(new NumPadComponent('num-pad'), ['x' => 0, 'y' => 80]);
 ```
 
-### 3. 条件字段类型检查
-```php
-// ❌ AOT 可能将 condition 推断为 int
-if ($cond !== null && !$this->component->evalCondition($cond)) continue;
+### 动态方法调用
 
-// ✅ AOT 安全
-$cond = $btn['condition'] ?? null;
-if ($cond !== null && !is_array($cond)) continue;
-if ($cond !== null && !$this->component->evalCondition($cond)) continue;
-```
-
-### 4. 避免变量函数调用
 ```php
 // ❌ AOT 不支持
 $method = 'getLayout';
@@ -468,19 +499,26 @@ if ($comp instanceof AppComponent) {
 }
 ```
 
-### 5. 子组件变量命名规范 (重要!)
-AOT 编译器严格要求变量类型一致性，同一变量不能赋值不同类型对象。
+### aot-checker.php 规则清单
 
-```php
-// ❌ AOT 编译失败: Cannot re-assign typed object
-$child = new DisplayPanelComponent('display-panel');
-$child = new NumPadComponent('num-pad');  // 错误! $child 已被类型化为 DisplayPanelComponent
+| 规则 | 说明 | 严重度 |
+|------|------|--------|
+| `aot_dynamic_variable` | `$$var` 可变变量 | ERROR |
+| `aot_variable_property` | `->$var` 动态属性 | ERROR |
+| `aot_variable_method` | `->$method()` 动态方法 | ERROR |
+| `aot_variable_function` | `$fn()` 可变函数 | ERROR |
+| `aot_extract` | `extract()` 动态变量注入 | ERROR |
+| `aot_yield` | `yield` 生成器 | ERROR |
+| `aot_eval_include` | `eval/include` 动态加载 | ERROR |
+| `aot_magic_methods` | `__get/__set` 魔术方法 | ERROR |
+| `aot_null_byte` | `\0` 字符串 | ERROR |
+| `hwnd_in_app` | Application 持有 hWnd | ERROR |
+| `hwnd_in_renderer` | BaseRenderer 持有 hWnd | ERROR |
+| `hdc_in_renderer` | BaseRenderer 持有 hdc | ERROR |
+| `hdc_param_in_methods` | 绘制方法接收 hdc | WARN |
+| `direct_cpp_call` | 业务代码调用 vue_* | ERROR |
 
-// ✅ AOT 安全: 使用 addChild() 直接传入
-$this->addChild(new DisplayPanelComponent('display-panel'), ['x' => 4, 'y' => 4]);
-$this->addChild(new NumPadComponent('num-pad'), ['x' => 0, 'y' => 80]);
-$this->addChild(new AboutDialogComponent('about-dialog'), ['x' => 0, 'y' => 0]);
-```
+运行命令：`php framework/aot-checker.php --project apps/calculator --skip direct_cpp_call`
 
 ---
 
@@ -529,19 +567,18 @@ main.php
         └─ BaseRenderer($component, $ctx)  ← 无需 hWnd/hdc
 ```
 
-**AntiPatternChecker 反模式检查工具**：
+**aot-checker.php AOT 兼容性检查工具**（v6 M3）：
 
 | 检查项 | 说明 | 严重度 |
 |--------|------|--------|
+| AOT 规则 | `$$var`, `->$var`, `->$method()`, `$fn()`, `extract()`, `eval()` 等 | ERROR |
 | `hwnd_in_app` | Application 不应持有 hWnd | ERROR |
 | `hwnd_in_renderer` | BaseRenderer 不应持有 hWnd | ERROR |
 | `hdc_in_renderer` | BaseRenderer 不应持有 hdc | ERROR |
-| `hwnd_not_in_render_ctx` | GdiRenderContext 必须持有 hWnd | ERROR |
-| `hdc_not_in_render_ctx` | GdiRenderContext 必须持有 hdc | ERROR |
 | `hdc_param_in_methods` | 绘制方法不应接收 hdc 参数 | WARN |
 | `direct_cpp_call` | 业务代码不应直接调用 vue_* 函数 | ERROR |
 
-运行命令：`php framework/AntiPatternChecker.php framework/`
+运行命令：`php framework/aot-checker.php --project apps/calculator`
 
 ---
 
