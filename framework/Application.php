@@ -292,7 +292,6 @@ class Application
                     $lParam = $msg[3] ?? 0;
                     $mx = $lParam & 0xFFFF;
                     $my = ($lParam >> 16) & 0xFFFF;
-                    file_put_contents('f:/work/pdv/click_debug.log', sprintf("MOUSE_DOWN: x=%d y=%d\n", $mx, $my), FILE_APPEND);
                     try {
                         $this->handleClick($mx, $my);
                     } catch (\Throwable $e) {
@@ -427,21 +426,6 @@ class Application
                 $buttons[] = $el;
             }
         }
-        // v6 M8 DEBUG: log click info
-        $logLine = sprintf(
-            "CLICK: x=%d y=%d scrollTop=%d actualCount=%d buttons=%d\n",
-            $x, $y, $scrollTop, $actualCount, count($buttons)
-        );
-        file_put_contents('f:/work/pdv/click_debug.log', $logLine, FILE_APPEND);
-        
-        // Also log visible button info
-        foreach ($buttons as $idx => $btn) {
-            $btnY = $btn['y'] ?? 0;
-            $btnIdx = $btn['list_index'] ?? -1;
-            $btnArg = $btn['arg'] ?? '';
-            $logLine = sprintf("  BTN[%d]: idx=%d arg=%s y=%d\n", $idx, $btnIdx, $btnArg, $btnY);
-            file_put_contents('f:/work/pdv/click_debug.log', $logLine, FILE_APPEND);
-        }
 
         $btnCount = count($buttons);
 
@@ -534,9 +518,6 @@ class Application
      */
     private function dispatchClick(array $btn): void
     {
-        $logLine = sprintf("DISPATCH: handler=%s arg=%s\n", $btn['handler'] ?? '', $btn['arg'] ?? '');
-        file_put_contents('f:/work/pdv/click_debug.log', $logLine, FILE_APPEND);
-        
         if ($this->rootComponent !== null) {
             // v6 M8 FIX: Use list_index as the actual item index for deletion
             // This fixes the issue where scrolling causes slot->item mismatch
@@ -544,7 +525,7 @@ class Application
             $scrollTop = 0;
             $itemHeight = 50;
             $itemsBind = '';
-            
+
             // Get scroll info from layout
             $layout = $this->getActiveLayout();
             $elements = (array)($layout['elements'] ?? []);
@@ -559,7 +540,7 @@ class Application
                     break;
                 }
             }
-            
+
             // For scroll-container children, compute actual item index
             if (($btn['scroll-container'] ?? false) && $listIndex >= 0) {
                 $baseIndex = (int)($scrollTop / $itemHeight);
@@ -567,11 +548,9 @@ class Application
                 // Override arg with actual item index for deleteItem handler
                 if ($btn['handler'] === 'deleteItem') {
                     $btn['arg'] = (string)$actualItemIndex;
-                    $logLine = sprintf("  -> OVERRIDE arg to %s (baseIndex=%d)\n", $btn['arg'], $baseIndex);
-                    file_put_contents('f:/work/pdv/click_debug.log', $logLine, FILE_APPEND);
                 }
             }
-            
+
             $this->rootComponent->dispatchClick($btn);
         }
     }
