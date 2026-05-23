@@ -1,0 +1,57 @@
+<article><h1 class="sc-jTQDnj PWYCG">性能</h1><section class="sc-beySbM lmGTpq"><p><code>AOT</code>编译器将性能作为第一目标，力求生成最佳的可执行指令，将<code>PHP</code>程序的性能提升至与<code>C/C++</code>、<code>Rust</code>、<code>Golang</code>等静态编程语言同等水平。</p><p>在保持高性能的同时，又保证绝对的内存安全。这与<code>C/C++</code>、<code>Rust</code>不同，<code>AOT</code>编译器不存在<code>Unsafe</code>代码。与<code>Rust</code>零成本抽象的设计不同，<code>AOT</code>编译器的设计目标是在保持<code>PHP</code>语言的易用性前提下，低成本抽象+绝对安全地实现高性能。</p><h2><a tabindex="-1" id="native-type" class="sc-hLQRIN dbkbOC"></a>Native Type</h2><p><code>AOT</code>编译器只提供了<code>3</code>种原生类型：</p><ul><li><code>Int</code>：<code>8</code>字节有符号整数</li><li><code>Float</code>：<code>8</code>字节有符号浮点型</li><li><code>Bool</code>：<code>1</code>字节，仅<code>0</code>或<code>1</code></li></ul><p>在执行阶段，所有原生类型计算时可理解为对<code>int64_t</code>类型的直接操作。例如下面的代码：</p><pre><code class="container--d9e3fe6d"><span class="token keyword">function</span> <span class="token function">add</span><span class="token punctuation">(</span>int $a<span class="token punctuation">,</span> int $b<span class="token punctuation">)</span><span class="token punctuation">:</span> int <span class="token punctuation">{</span>
+    <span class="token keyword">return</span> $a <span class="token operator">+</span> $b<span class="token punctuation">;</span>
+<span class="token punctuation">}</span>
+</code></pre><p>对应的汇编指令为：</p><pre><code class="container--d9e3fe6d">add<span class="token punctuation">:</span>
+    mov rax<span class="token punctuation">,</span> rdi    <span class="token punctuation">;</span> RAX <span class="token operator">=</span> a
+    add rax<span class="token punctuation">,</span> rsi    <span class="token punctuation">;</span> RAX <span class="token operator">=</span> RAX <span class="token operator">+</span> b
+    ret
+</code></pre><p>当使用<code>O2/O3</code>优化时，使用<code>$result = add($x, $y)</code>会内联被优化为<code>2</code>条指令：</p><pre><code class="container--d9e3fe6d">lea rax<span class="token punctuation">,</span> <span class="token punctuation">[</span>x <span class="token operator">+</span> y<span class="token punctuation">]</span>   <span class="token punctuation">;</span> 没有call<span class="token operator">/</span>ret指令
+mov <span class="token punctuation">[</span>result<span class="token punctuation">]</span><span class="token punctuation">,</span> rax
+</code></pre><h2><a tabindex="-1" id="对象属性" class="sc-hLQRIN dbkbOC"></a>对象属性</h2><p><code>AOT</code>编译器对对象属性的读写，会优化为高效的内存操作，几乎可以等同于<code>C Struct</code>的性能。</p><pre><code class="container--d9e3fe6d">class <span class="token class-name">Obj</span> <span class="token punctuation">{</span>
+     public int $a<span class="token punctuation">;</span>
+     public float $b<span class="token punctuation">;</span>
+<span class="token punctuation">}</span>
+$o <span class="token operator">=</span> <span class="token keyword">new</span> <span class="token class-name">Obj</span><span class="token punctuation">;</span>
+$obj<span class="token operator">-</span><span class="token operator">&gt;</span>a <span class="token operator">=</span> <span class="token number">10</span><span class="token punctuation">;</span>
+</code></pre><p>实际执行时，<code>$obj-&gt;a</code>会直接转为对象指针的偏移，性能会非常高。这与访问<code>C Struct</code>元素的方式几乎是一致的。</p><pre><code class="container--d9e3fe6d">zend_object <span class="token operator">*</span>o<span class="token punctuation">;</span>
+<span class="token function">Z_LVAL_P</span><span class="token punctuation">(</span>o <span class="token operator">+</span> property_offset<span class="token punctuation">)</span> <span class="token operator">=</span> <span class="token number">10</span><span class="token punctuation">;</span>
+</code></pre><p>若对象属性为原生类型，<code>AOT</code>编译器还会生成更高效的指令：</p><pre><code class="container--d9e3fe6d">zend_object <span class="token operator">*</span>o<span class="token punctuation">;</span>
+php<span class="token punctuation">:</span><span class="token punctuation">:</span>Int <span class="token operator">&amp;</span>property_a <span class="token operator">=</span> <span class="token function">Z_LVAL_P</span><span class="token punctuation">(</span>o <span class="token operator">+</span> property_offset<span class="token punctuation">)</span><span class="token punctuation">;</span>
+
+property_a <span class="token operator">=</span> <span class="token number">10</span><span class="token punctuation">;</span>
+</code></pre><p>这在大循环中对属性计算的程序中性能将达到极致。</p><pre><code class="container--d9e3fe6d">class <span class="token class-name">Obj</span> <span class="token punctuation">{</span>
+     public int $a<span class="token punctuation">;</span>
+     public float $b<span class="token punctuation">;</span>
+
+     <span class="token keyword">function</span> <span class="token function">foo</span><span class="token punctuation">(</span><span class="token punctuation">)</span> <span class="token punctuation">{</span>
+        $n <span class="token operator">=</span> <span class="token number">10000000</span><span class="token punctuation">;</span>
+        <span class="token keyword">while</span><span class="token punctuation">(</span>$n<span class="token operator">--</span><span class="token punctuation">)</span> <span class="token punctuation">{</span>
+            $this<span class="token operator">-</span><span class="token operator">&gt;</span>a <span class="token operator">+</span><span class="token operator">=</span> $n<span class="token punctuation">;</span>
+        <span class="token punctuation">}</span>
+    <span class="token punctuation">}</span>
+<span class="token punctuation">}</span>
+</code></pre><p>等价于下面的<code>C++</code>代码</p><pre><code class="container--d9e3fe6d">php<span class="token punctuation">:</span><span class="token punctuation">:</span>Int <span class="token operator">&amp;</span>property_a <span class="token operator">=</span> <span class="token function">Z_LVAL_P</span><span class="token punctuation">(</span>this_ <span class="token operator">+</span> property_offset<span class="token punctuation">)</span><span class="token punctuation">;</span>
+int64_t n <span class="token operator">=</span> <span class="token number">10000000</span><span class="token punctuation">;</span>
+<span class="token keyword">while</span> <span class="token punctuation">(</span>n<span class="token operator">--</span><span class="token punctuation">)</span> <span class="token punctuation">{</span>
+    property_a <span class="token operator">+</span><span class="token operator">=</span> n<span class="token punctuation">;</span>
+<span class="token punctuation">}</span>
+</code></pre><h2><a tabindex="-1" id="函数方法调用" class="sc-hLQRIN dbkbOC"></a>函数/方法调用</h2><h3><a tabindex="-1" id="内置函数类方法" class="sc-hLQRIN dbkbOC"></a>内置函数/类方法</h3><p>由<code>ZendVM</code>提供的内置函数、内置类方法，使用<code>ZendVM</code>的<code>zend_call_known_function</code>动态调用，<code>AOT</code>编译器会在运行时一次性获取<code>zend_function *</code>指针，并存储至函数表中，减少对<code>EG(function_table)</code>的查询。</p><p>此类函数通常在编译期就可以得到参数、返回值，并且可以确定函数存在，因此可以被缓存至函数表中，以提高性能。</p><p>若使用了动态调用，则无法优化为<code>known call</code>。只能在运行时动态调用。</p><pre><code class="container--d9e3fe6d">$fn <span class="token operator">=</span> <span class="token string">"str_repeat"</span><span class="token punctuation">;</span>
+<span class="token comment">// 无法优化</span>
+$<span class="token function">fn</span><span class="token punctuation">(</span><span class="token string">"a"</span><span class="token punctuation">,</span> <span class="token number">100</span><span class="token punctuation">)</span><span class="token punctuation">;</span>
+</code></pre><h3><a tabindex="-1" id="动态函数类方法" class="sc-hLQRIN dbkbOC"></a>动态函数/类方法</h3><p>有用户代码定义、通过<code>Composer Autoload</code>加载的函数和类方法，需要动态查找<code>EG(function_table)</code>，获取<code>zend_function *</code>指针后提交至<code>ZendVM</code>动态执行。</p><h3><a tabindex="-1" id="原生函数类方法" class="sc-hLQRIN dbkbOC"></a>原生函数/类方法</h3><p>由<code>AOT</code>编译后<code>PHP</code>定义的函数/类方法将作为原生函数调用。原生函数调用仅需进行入栈和出栈的内存、寄存器操作，相比<code>ZendVM</code>的动态函数调用性能更好。</p><blockquote><p>原生函数调用不会产生堆栈，无法使用<code>debug_backtrace</code>获取</p></blockquote><p>原生函数可被<code>C++</code>编译器内联优化，性能会非常高。例如：</p><pre><code class="container--d9e3fe6d"><span class="token keyword">function</span> <span class="token function">fib</span><span class="token punctuation">(</span>int $n<span class="token punctuation">)</span><span class="token punctuation">:</span> int
+<span class="token punctuation">{</span>
+    <span class="token keyword">if</span> <span class="token punctuation">(</span>$n <span class="token operator">==</span> <span class="token number">1</span> <span class="token operator">||</span> $n <span class="token operator">==</span> <span class="token number">2</span><span class="token punctuation">)</span> <span class="token punctuation">{</span>
+        <span class="token keyword">return</span> <span class="token number">1</span><span class="token punctuation">;</span>
+    <span class="token punctuation">}</span> <span class="token keyword">else</span> <span class="token punctuation">{</span>
+        <span class="token keyword">return</span> <span class="token function">fib</span><span class="token punctuation">(</span>$n <span class="token operator">-</span> <span class="token number">1</span><span class="token punctuation">)</span> <span class="token operator">+</span> <span class="token function">fib</span><span class="token punctuation">(</span>$n <span class="token operator">-</span> <span class="token number">2</span><span class="token punctuation">)</span><span class="token punctuation">;</span>
+    <span class="token punctuation">}</span>
+<span class="token punctuation">}</span>
+
+<span class="token keyword">function</span> <span class="token function">main</span><span class="token punctuation">(</span>int $argc<span class="token punctuation">,</span> array $argv<span class="token punctuation">)</span><span class="token punctuation">:</span> void
+<span class="token punctuation">{</span>
+    $n <span class="token operator">=</span> $argv<span class="token punctuation">[</span><span class="token number">2</span><span class="token punctuation">]</span><span class="token punctuation">;</span>
+    $begin <span class="token operator">=</span> <span class="token function">microtime</span><span class="token punctuation">(</span><span class="token boolean">true</span><span class="token punctuation">)</span><span class="token punctuation">;</span>
+    echo <span class="token function">fib</span><span class="token punctuation">(</span>$n<span class="token punctuation">)</span> <span class="token punctuation">.</span> <span class="token string">"\n"</span><span class="token punctuation">;</span>
+    echo <span class="token string">"Time: "</span> <span class="token punctuation">.</span> <span class="token punctuation">(</span><span class="token function">microtime</span><span class="token punctuation">(</span><span class="token boolean">true</span><span class="token punctuation">)</span> <span class="token operator">-</span> $begin<span class="token punctuation">)</span> <span class="token punctuation">.</span> <span class="token string">"\n"</span><span class="token punctuation">;</span>
+<span class="token punctuation">}</span>
+</code></pre><p>这段代码中<code>fib</code>函数将会被编译器进行尾递归优化，最终生成平坦的<code>CPU</code>指令，性能将比普通的<code>PHP</code>动态函数调用高出数百倍。</p></section></article>

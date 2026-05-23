@@ -1,0 +1,18 @@
+<article><h1 class="sc-jTQDnj PWYCG">编译</h1><section class="sc-beySbM lmGTpq"><p>编译器支持三种使用方式</p><h2><a tabindex="-1" id="单文件" class="sc-hLQRIN dbkbOC"></a>单文件</h2><pre><code class="container--d9e3fe6d"><span class="token punctuation">.</span><span class="token operator">/</span>swoole_compiler your_path<span class="token operator">/</span>file<span class="token punctuation">.</span>php
+</code></pre><h2><a tabindex="-1" id="目录" class="sc-hLQRIN dbkbOC"></a>目录</h2><pre><code class="container--d9e3fe6d"><span class="token punctuation">.</span><span class="token operator">/</span>swoole_compiler my_project<span class="token operator">/</span>
+</code></pre><p>编译器将递归遍历整个目录，查找<code>.php</code>文件，并逐个编译为<code>.o</code>目标文件，最终连接在一起生成可执行文件。</p><h2><a tabindex="-1" id="yaml-配置" class="sc-hLQRIN dbkbOC"></a>YAML 配置</h2><pre><code class="container--d9e3fe6d">name<span class="token punctuation">:</span> prime
+version<span class="token punctuation">:</span> <span class="token number">0.0</span><span class="token number">.1</span>
+cxxflags<span class="token punctuation">:</span> <span class="token operator">|</span>
+  <span class="token operator">-</span>std<span class="token operator">=</span>c<span class="token operator">++</span><span class="token number">17</span>
+  <span class="token operator">-</span>I<span class="token operator">/</span>usr<span class="token operator">/</span>include<span class="token operator">/</span>python3<span class="token punctuation">.</span><span class="token number">10</span>
+  <span class="token operator">-</span>Wall
+ldflags<span class="token punctuation">:</span> <span class="token operator">|</span>
+  <span class="token operator">-</span>L<span class="token operator">/</span>usr<span class="token operator">/</span>lib<span class="token operator">/</span>x86_64<span class="token operator">-</span>linux<span class="token operator">-</span>gnu<span class="token operator">/</span>
+  <span class="token operator">-</span>lssl
+sources<span class="token punctuation">:</span>
+  <span class="token operator">-</span> php<span class="token operator">-</span>src
+  <span class="token operator">-</span> <span class="token punctuation">.</span><span class="token operator">/</span>cpp<span class="token operator">-</span>src
+  <span class="token operator">-</span> main<span class="token punctuation">.</span>php
+ignore<span class="token punctuation">:</span>
+  <span class="token operator">-</span> vendor<span class="token operator">/</span>autoload<span class="token punctuation">.</span>php
+</code></pre><p>使用 <code>YAML</code> 配置文件。可以配置多个源码目录，文件忽略以及编译参数。复杂的工程建议使用<code>yaml</code>配置方式。</p><ul><li><code>sources</code>和<code>ignore</code>可配置多个路径，支持文件或者目录的方式，若为目录则会遍历获取所有<code>.php</code>文件</li><li>路径支持绝对路径和相对路径，相对路径计算时<code>cwd</code>当前目录为<code>yaml</code>文件所在的目录</li><li>当<code>yaml</code>配置项与执行编译命令的参数冲突时，优先使用命令行参数</li></ul></section></article>
