@@ -18,11 +18,15 @@ sources:
 
   # 框架运行时
   - ../../framework/Application.php
+  - ../../framework/VNode.php
+  - ../../framework/VNodeRenderer.php
+  - ../../framework/LayoutResolver.php
   - ../../framework/interfaces/ComponentInterface.php
   - ../../framework/BaseComponent.php
   - ../../framework/ReactiveComponent.php
   - ../../framework/ChangeQueue.php
-  - ../../framework/BaseRenderer.php
+  - ../../framework/FocusManager.php
+  - ../../framework/compiler/css-mappings.php
   - ../../framework/rendering/RenderContext.php
   - ../../framework/rendering/GdiRenderContext.php
 

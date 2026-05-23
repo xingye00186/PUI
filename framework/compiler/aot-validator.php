@@ -74,8 +74,8 @@ class AotValidator
         // ============================================================
         // 扩展检测: 不仅匹配 $obj->$var，还匹配 $this->prop->$var 等嵌套链
         if (preg_match('/->\$\w+(?!\s*\()/s', $code)) {
-            $this->errors[] = "AOT: Variable property access detected (->$var). " .
-                "AOT does not support property chain ->$var. " .
+            $this->errors[] = "AOT: Variable property access detected (->\$var). " .
+                "AOT does not support property chain ->\$var. " .
                 "Use explicit if/else mapping instead.";
         }
 
@@ -84,8 +84,8 @@ class AotValidator
         // ============================================================
         // 扩展检测: 不仅匹配 $obj->$method()，还匹配 $this->prop->$method() 等
         if (preg_match('/->\$\w+\s*\(/s', $code)) {
-            $this->errors[] = "AOT: Variable method call detected (->$method()). " .
-                "AOT does not support property chain ->$method(). " .
+            $this->errors[] = "AOT: Variable method call detected (->\$method()). " .
+                "AOT does not support property chain ->\$method(). " .
                 "Use explicit if/else routing instead.";
         }
 

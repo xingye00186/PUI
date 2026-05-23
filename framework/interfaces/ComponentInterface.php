@@ -18,23 +18,15 @@ interface ComponentInterface
     public function getId(): string;
 
     /**
-     * 获取组件布局数据（不含偏移/绑定替换）
-     * 返回格式:
-     *   [
-     *     'elements' => [...],      // rect/text/button 等元素
-     *     'components' => [...]    // v-if 动态子组件声明
-     *   ]
+     * 获取组件渲染输出 (VNode 树)
      *
-     * components 元素结构:
-     *   [
-     *     'type' => 'ComponentClassName',   // 子组件类名
-     *     'key' => 'uniqueKey',              // 实例唯一标识
-     *     'props' => ['x' => 0, 'y' => 0],    // 子组件 props（包含偏移）
-     *     'vIf' => 'showDialog',             // v-if 条件绑定表达式
-     *     'children' => [...]                // 递归声明嵌套子组件
-     *   ]
+     * 返回一个 VNode('#root', props, [children...]) 树结构。
+     * 此方法在组件每次需要渲染时调用，返回的 VNode 树被 LayoutResolver
+     * 计算位置后交给 VNodeRenderer 绘制。
+     *
+     * @return VNode 根节点 (type='#root')
      */
-    public function getLayout(): array;
+    public function render(): VNode;
 
     /**
      * 获取子组件列表

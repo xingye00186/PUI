@@ -111,14 +111,14 @@ class AotChecker
 
         'hwnd_in_renderer' => [
             'severity' => 'ERROR',
-            'pattern' => '/class\s+BaseRenderer\b[\s\S]*?\{[\s\S]*?private\s+.*?\$hWnd/s',
-            'message' => 'BaseRenderer 不应持有 hWnd 属性',
+            'pattern' => '/class\s+VNodeRenderer\b[\s\S]*?\{[\s\S]*?private\s+.*?\$hWnd/s',
+            'message' => 'VNodeRenderer 不应持有 hWnd 属性',
         ],
 
         'hdc_in_renderer' => [
             'severity' => 'ERROR',
-            'pattern' => '/class\s+BaseRenderer\b[\s\S]*?\{[\s\S]*?private\s+.*?\$hdc/s',
-            'message' => 'BaseRenderer 不应持有 hdc 属性',
+            'pattern' => '/class\s+VNodeRenderer\b[\s\S]*?\{[\s\S]*?private\s+.*?\$hdc/s',
+            'message' => 'VNodeRenderer 不应持有 hdc 属性',
         ],
 
         'hdc_param_in_methods' => [

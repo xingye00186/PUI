@@ -3,40 +3,55 @@
 use native_types;
 
 /**
- * Application — 通用 SFC 应用控制器 (v6 M3)
+ * Application — VNode-driven application controller (v7)
  *
- * 负责窗口初始化、事件循环、点击分发、脏标记驱动的渲染调度。
- * v6 M3: 支持 v-if 动态组件（条件挂载/卸载）和组件缓存池。
+ * 负责窗口初始化、VNode 事件循环、点击分发、脏标记驱动的渲染调度。
+ * v7 变更:
+ *   - 使用 VNode 树替代 flat element 数组
+ *   - LayoutResolver 计算位置, VNodeRenderer 渲染
+ *   - dispatchClick 使用 match 表达式 (PHP 8.4)
+ *   - 支持 v-if 动态组件管理
  *
  * AOT 兼容性:
  *   - 使用 array_keys() + for 循环遍历关联数组
- *   - 使用 (array) 类型转换保留数组引用
  */
 class Application
 {
-    /** 根组件引用 */
+    /** 根组件 */
     private ?ReactiveComponent $rootComponent = null;
 
     /** 活跃组件列表 (id => ComponentInterface) */
     private array $activeComponents = [];
 
-    /** 组件实例缓存池 (key => ComponentInterface) - 用于 v-if 复用 */
+    /** 组件实例缓存池 (key => ComponentInterface) - v-if 复用 */
     private array $componentPool = [];
 
-    /** v-if 实例状态追踪 (key => bool) - 记录上次渲染时的条件值 */
+    /** v-if 实例状态追踪 */
     private array $vifStates = [];
 
-    /** v6 M4: 焦点系统 - 当前聚焦的组件 ID */
+    /** 焦点系统 */
     private string $focusedId = '';
 
-    /** v6 M4: 聚焦的 textbox 元素数据 */
-    private ?array $focusedTextBox = null;
+    /** 聚焦的 input 元素 VNode */
+    private ?VNode $focusedInput = null;
 
     /** 渲染器 */
-    private BaseRenderer $renderer;
+    private VNodeRenderer $renderer;
+
+    /** 布局解析器 */
+    private LayoutResolver $layoutResolver;
 
     /** 渲染上下文 */
     private RenderContext $ctx;
+
+    /** CSS class styles (从 <style> 解析) */
+    private array $classStyles = [];
+
+    /** 当前活动的 VNode 树根 */
+    private ?VNode $activeVNodeTree = null;
+
+    /** 当前滚动容器列表 (从 LayoutResolver) */
+    private array $scrollContainers = [];
 
     public function __construct(ReactiveComponent $root, RenderContext $ctx)
     {
@@ -46,8 +61,16 @@ class Application
     }
 
     /**
+     * 设置 CSS class styles (从 SFC 编译期传入)
+     */
+    public function setClassStyles(array $classStyles): void
+    {
+        $this->classStyles = $classStyles;
+        $this->layoutResolver = new LayoutResolver($classStyles);
+    }
+
+    /**
      * 初始化渲染器
-     * v6 M3: 直接挂载根组件（静态子组件树已废弃，动态组件由 collectLayoutRecursive 管理）
      */
     public function initRenderer(): bool
     {
@@ -57,59 +80,54 @@ class Application
             $this->rootComponent->onMount();
         }
 
-        $this->renderer = new BaseRenderer($this->rootComponent, $this->ctx);
+        // Load CSS class styles from generated component if available
+        if ($this->rootComponent !== null && method_exists($this->rootComponent, 'getClassStyles')) {
+            $this->classStyles = $this->rootComponent->getClassStyles();
+        }
+
+        $this->layoutResolver = new LayoutResolver($this->classStyles);
+        $this->renderer = new VNodeRenderer($this->rootComponent, $this->ctx);
 
         return true;
     }
 
-    /**
-     * 挂载 v-if 动态组件（创建或从缓存池取出）
-     * @param string $key 实例唯一标识
-     * @param string $type 组件类名
-     * @param array $props 组件属性（包含偏移）
-     * @param ComponentInterface $parent 父组件引用
-     * @param array $bindProps 动态绑定的 props（如 :value="display"）
-     * @return ComponentInterface
-     */
+    // ============================================================
+    // v-if 动态组件管理 (保留)
+    // ============================================================
+
     private function mountComponent(string $key, string $type, array $props, ComponentInterface $parent, array $bindProps = []): ComponentInterface
     {
-        // 优先从缓存池取出
         if (isset($this->componentPool[$key])) {
             $comp = $this->componentPool[$key];
             unset($this->componentPool[$key]);
         } else {
-            // 创建新实例
-            $comp = $this->createComponentInstance($type, $props);
+            $comp = ComponentFactory::create($type, $props);
         }
 
         $id = $comp->getId();
         $this->activeComponents[$id] = $comp;
         $comp->onMount();
 
-        // 设置父子关系
         if (method_exists($comp, 'setParent')) {
             $comp->setParent($parent);
         }
-        // v6 M5: 添加到父组件的 children 列表（用于 BaseRenderer.buildComponentMap）
         if (method_exists($parent, 'addChild')) {
             $parent->addChild($comp, []);
         }
 
-        // v6 M5: 设置动态属性绑定 (如 :value="display" → component.value = root.display)
         foreach ($bindProps as $propName => $bindKey) {
             if (method_exists($comp, 'setBindValue') && $this->rootComponent !== null) {
-                $value = $this->rootComponent->getBindValue($bindKey);
-                $comp->setBindValue($propName, $value);
+                $value = $this->rootComponent->setBindValue($bindKey, '');
+                if (method_exists($this->rootComponent, 'getBindValue')) {
+                    $value = $this->rootComponent->getBindValue($bindKey);
+                    $comp->setBindValue($propName, $value);
+                }
             }
         }
 
         return $comp;
     }
 
-    /**
-     * 卸载 v-if 动态组件（放入缓存池）
-     * @param ComponentInterface $comp 组件实例
-     */
     private function unmountComponent(ComponentInterface $comp): void
     {
         $id = $comp->getId();
@@ -120,10 +138,8 @@ class Application
             unset($this->activeComponents[$id]);
         }
 
-        // 放入缓存池（最多缓存 10 个实例）
         $poolSize = count($this->componentPool);
         if ($poolSize >= 10) {
-            // 移除最旧的
             $keys = array_keys($this->componentPool);
             unset($this->componentPool[$keys[0]]);
         }
@@ -131,160 +147,91 @@ class Application
     }
 
     /**
-     * 创建组件实例
-     * v6 M3: 使用 ComponentFactory 替代动态 new
-     * @param string $type 组件类名
-     * @param array $props 组件属性
-     * @return ComponentInterface
+     * Trigger a VNode tree rebuild and re-render.
      */
-    private function createComponentInstance(string $type, array $props): ComponentInterface
+    public function rebuildVNodeTree(): VNode
     {
-        return ComponentFactory::create($type, $props);
+        // Collect VNode trees from root and active components
+        $rootVNode = null;
+
+        if ($this->rootComponent !== null) {
+            $rootVNode = $this->rootComponent->render();
+        }
+
+        if ($rootVNode === null) {
+            $rootVNode = VNode::h('#root', ['style' => 'width:400px;height:500px'], []);
+        }
+
+        // Merge in active child components
+        $this->mergeChildVNodes($rootVNode);
+
+        // Resolve layout positions
+        $result = $this->layoutResolver->resolve($rootVNode);
+        $this->scrollContainers = $result['scrollContainers'] ?? [];
+
+        $this->activeVNodeTree = $rootVNode;
+        return $rootVNode;
     }
 
     /**
-     * 收集所有活跃组件的布局数据并应用偏移
-     * v6 M2 核心逻辑: 遍历组件树，动态应用 offset/props
-     *
-     * @return array ['elements' => [...]] (统一 elements 数组，包含 rect/text/button)
+     * Merge child component VNode trees into the root.
      */
-    public function getActiveLayout(): array
+    private function mergeChildVNodes(VNode $root): void
     {
-        if ($this->rootComponent === null) {
-            return ['elements' => []];
-        }
+        foreach ($this->activeComponents as $id => $comp) {
+            if ($comp === $this->rootComponent) continue;
+            if (!($comp instanceof ReactiveComponent)) continue;
 
-        $allElements = [];
-
-        $this->collectLayoutRecursive($this->rootComponent, 0, 0, $allElements);
-
-        return ['elements' => $allElements];
-    }
-
-    /**
-     * 递归收集组件树布局数据
-     * v6 M3: 支持 v-if 动态组件（条件挂载/卸载）和 components 声明
-     *
-     * @param ComponentInterface $comp 当前组件
-     * @param int $offsetX 累积 X 偏移
-     * @param int $offsetY 累积 Y 偏移
-     * @param array &$elements 收集的元素（包含 rect/text/button）
-     */
-    private function collectLayoutRecursive(
-        ComponentInterface $comp,
-        int $offsetX,
-        int $offsetY,
-        array &$elements
-    ): void {
-        $layout = $comp->getLayout();
-
-        // 统一处理 elements (AOT 安全)
-        $layoutElements = (array)($layout['elements'] ?? []);
-        $elCount = count($layoutElements);
-        for ($i = 0; $i < $elCount; $i++) {
-            $el = $layoutElements[$i];
-            if (is_array($el)) {
-                $el['x'] = ($el['x'] ?? 0) + $offsetX;
-                $el['y'] = ($el['y'] ?? 0) + $offsetY;
-                // container 坐标也需偏移
-                if (isset($el['containerX'])) {
-                    $el['containerX'] += $offsetX;
-                }
-                if (isset($el['containerY'])) {
-                    $el['containerY'] += $offsetY;
-                }
-                $elements[] = $el;
-            }
-        }
-
-        // ====== v-if 动态组件处理 ======
-        $vifComponents = (array)($layout['components'] ?? []);
-        $vifCount = count($vifComponents);
-        for ($i = 0; $i < $vifCount; $i++) {
-            $vifEl = $vifComponents[$i];
-            if (!is_array($vifEl)) continue;
-
-            $type = $vifEl['type'] ?? '';
-            $key = $vifEl['key'] ?? '';
-            $props = (array)($vifEl['props'] ?? []);
-            $vIf = $vifEl['vIf'] ?? null;
-            $bindProps = (array)($vifEl['bindProps'] ?? []);  // v6 M5: 动态绑定 props
-
-            if ($type === '' || $key === '') continue;
-
-            // 计算当前条件值（使用结构化条件数组）
-            $conditionMet = true;
-            if ($vIf !== null && is_array($vIf) && $this->rootComponent !== null) {
-                $conditionMet = $this->rootComponent->evalCondition($vIf);
-            }
-
-            $wasActive = $this->vifStates[$key] ?? false;
-
-            if ($conditionMet && !$wasActive) {
-                // 条件从 false 变为 true: 挂载组件
-                $props['_poolKey'] = $key;
-                $childComp = $this->mountComponent($key, $type, $props, $comp, $bindProps);
-                $childOffsetX = $props['x'] ?? 0;
-                $childOffsetY = $props['y'] ?? 0;
-                $this->collectLayoutRecursive(
-                    $childComp,
-                    $offsetX + $childOffsetX,
-                    $offsetY + $childOffsetY,
-                    $elements
-                );
-            } elseif ($conditionMet && $wasActive) {
-                // 条件始终为 true: 同步绑定值 + 收集已挂载的组件布局
-                $childComp = $this->activeComponents[$key] ?? null;
-                if ($childComp !== null) {
-                    // v6 M5: 同步动态绑定 props（父组件值变化时更新）
-                    foreach ($bindProps as $propName => $bindKey) {
-                        if (method_exists($childComp, 'setBindValue') && $this->rootComponent !== null) {
-                            $value = $this->rootComponent->getBindValue($bindKey);
-                            $childComp->setBindValue($propName, $value);
+            try {
+                $childVNode = $comp->render();
+                if ($childVNode !== null) {
+                    // Collect child VNode's children
+                    $childChildren = [];
+                    if ($childVNode->children instanceof VNode) {
+                        $childVNode->children->groupId = $id;
+                        $childChildren = [$childVNode->children];
+                    } elseif (is_array($childVNode->children)) {
+                        foreach ($childVNode->children as $gc) {
+                            if ($gc instanceof VNode) {
+                                $gc->groupId = $id;
+                            }
                         }
+                        $childChildren = $childVNode->children;
                     }
-                    $childOffsetX = $props['x'] ?? 0;
-                    $childOffsetY = $props['y'] ?? 0;
-                    $this->collectLayoutRecursive(
-                        $childComp,
-                        $offsetX + $childOffsetX,
-                        $offsetY + $childOffsetY,
-                        $elements
-                    );
+                    // Append to root's children
+                    if (!empty($childChildren)) {
+                        if ($root->children instanceof VNode) {
+                            $root->children = [$root->children];
+                        } elseif (!is_array($root->children)) {
+                            $root->children = [];
+                        }
+                        $root->children = array_merge($root->children, $childChildren);
+                    }
                 }
-            } else {
-                // 条件为 false: 卸载组件（如果之前是活跃的）
-                if ($wasActive && isset($this->activeComponents[$key])) {
-                    $this->unmountComponent($this->activeComponents[$key]);
-                }
+            } catch (\Throwable $e) {
+                echo "ERROR in child render ($id): " . $e->getMessage() . "\n";
             }
-
-            // 更新状态追踪
-            $this->vifStates[$key] = $conditionMet;
         }
-        // v6 M3: 静态子组件已废弃，所有子组件通过 components 声明管理
     }
 
-    /**
-     * 主事件循环
-     */
+    // ============================================================
+    // 主事件循环
+    // ============================================================
+
     public function run(): void
     {
-        $running = true;
-
-        // v6 M5: 更新组件映射（确保子组件已挂载）
-        $this->renderer->updateComponentMap();
-        // v6 M2: 传递预处理后的布局数据给渲染器
-        $this->renderer->render($this->getActiveLayout());
+        // Initial render
+        $rootVNode = $this->rebuildVNodeTree();
+        $this->renderer->render($rootVNode);
 
         echo "App started!\n";
+
+        $running = true;
 
         while ($running) {
             while (true) {
                 $msg = vue_peek_message();
-                if (count($msg) == 0) {
-                    break;
-                }
+                if (count($msg) == 0) break;
 
                 $msgType = $msg[1] ?? 0;
 
@@ -296,15 +243,13 @@ class Application
                         $this->handleClick($mx, $my);
                     } catch (\Throwable $e) {
                         echo "ERROR in handleClick: " . $e->getMessage() . "\n";
-                        echo $e->getTraceAsString() . "\n";
                     }
                 }
 
-                // v6 M5: 鼠标滚轮事件 — 滚动容器
                 if ($msgType == WinMsg::WM_MOUSEWHEEL) {
                     $wParam = $msg[2] ?? 0;
                     $delta = (int)(($wParam >> 16) & 0xFFFF);
-                    if ($delta >= 32768) $delta -= 65536; // signed int16
+                    if ($delta >= 32768) $delta -= 65536;
                     try {
                         $this->handleScroll($delta);
                     } catch (\Throwable $e) {
@@ -312,7 +257,6 @@ class Application
                     }
                 }
 
-                // v6 M4: 键盘事件处理
                 if ($msgType == WinMsg::WM_KEYDOWN || $msgType == WinMsg::WM_CHAR) {
                     $wParam = $msg[2] ?? 0;
                     try {
@@ -331,17 +275,13 @@ class Application
             if (vue_quit_requested()) {
                 $running = false;
             }
-            if (!$running) {
-                break;
-            }
+            if (!$running) break;
 
-            // 数据驱动渲染: 仅在组件状态变更后重绘
+            // Dirty check: re-render if needed
             if ($this->rootComponent !== null && $this->rootComponent->dirty) {
                 try {
-                    // v6 M5: 更新组件映射（确保获取最新的子组件绑定值）
-                    $this->renderer->updateComponentMap();
-                    // v6 M2: 传递预处理后的布局数据
-                    $this->renderer->render($this->getActiveLayout());
+                    $rootVNode = $this->rebuildVNodeTree();
+                    $this->renderer->render($rootVNode);
                 } catch (\Throwable $e) {
                     echo "RENDER ERROR: " . $e->getMessage() . "\n";
                 }
@@ -354,342 +294,366 @@ class Application
         echo "App closed\n";
     }
 
-    /**
-     * 处理鼠标点击: 分层命中测试
-     * v6 M2: 从 elements 中筛选 type='button' 的元素
-     */
+    // ============================================================
+    // 点击处理 — VNode 树遍历
+    // ============================================================
+
     private function handleClick(int $x, int $y): void
     {
-        $layout = $this->getActiveLayout();
-        $elements = (array)($layout['elements'] ?? []);
+        if ($this->activeVNodeTree === null) return;
 
-        // v6 M5: First pass — find scroll-container to determine scroll offset
-        $scrollTop = 0;
-        $scrollCtx = null; // {x, y, w, h}
-        $actualCount = 0; // v6 M6: actual items count for hit testing
-        $itemHeight = 50; // v6 M8: item height for slot calculation
-        $elCount = count($elements);
-        for ($i = 0; $i < $elCount; $i++) {
-            $el = $elements[$i];
-            if (!is_array($el)) continue;
-            if (($el['type'] ?? '') === 'scroll-container') {
-                $scrollCtx = [
-                    'x' => $el['x'] ?? 0,
-                    'y' => $el['y'] ?? 0,
-                    'w' => $el['w'] ?? 0,
-                    'h' => $el['h'] ?? 0,
-                ];
-                $scrollTopBind = $el['scroll-top-bind'] ?? '';
-                if ($scrollTopBind !== '' && $this->rootComponent !== null) {
-                    $scrollTopStr = $this->rootComponent->getBindValue($scrollTopBind);
-                    $scrollTop = (int)$scrollTopStr;
-                }
-                // v6 M6: Compute actual items count for hit testing
-                $itemsBind = $el['items-bind'] ?? '';
-                if ($itemsBind !== '' && $this->rootComponent !== null) {
-                    $itemsJson = $this->rootComponent->getBindValue($itemsBind);
-                    $items = json_decode($itemsJson, true) ?? [];
-                    $actualCount = count($items);
-                }
-                break; // only one scroll-container
-            }
-        }
+        // Check scroll bar hit first
+        if ($this->handleScrollBarClick($x, $y)) return;
 
-        // 收集所有按钮元素
-        $buttons = [];
-        $debugLog = [];
-        for ($i = 0; $i < $elCount; $i++) {
-            $el = $elements[$i];
-            if (!is_array($el)) continue;
-            if (($el['type'] ?? '') === 'button') {
-                // v6 M5: Apply scroll offset for buttons inside scroll-container
-                $isScrollChild = ($el['scroll-container'] ?? false);
-                if ($isScrollChild && $scrollCtx !== null) {
-                    $adjustedY = ($el['y'] ?? 0) - $scrollTop;
-                    // v6 M6 FIX: Skip buttons completely outside visible area
-                    $containerTop = $scrollCtx['y'];
-                    $containerBottom = $scrollCtx['y'] + $scrollCtx['h'];
-                    $btnH = $el['h'] ?? 0;
-                    if ($adjustedY + $btnH <= $containerTop || $adjustedY >= $containerBottom) {
-                        continue; // Button is not visible, skip
-                    }
-                    $el['y'] = $adjustedY;
-                    // v6 M8 FIX: Dynamic slot-to-item mapping for scrolling
-                    // Only apply for scroll-container children (not Add Item etc.)
-                    $baseIndex = (int)($scrollTop / $itemHeight);
-                    $listIndex = ($el['list_index'] ?? -1);
-                    $actualItemIndex = $listIndex - $baseIndex;
-                    if ($actualItemIndex < 0 || $actualItemIndex >= $actualCount) {
-                        continue;
-                    }
-                }
-                $buttons[] = $el;
-            }
-        }
-
-        $btnCount = count($buttons);
-
-        // Phase 1: 确定最高活跃层 (AOT 安全)
-        $maxLayer = 0;
-        for ($i = 0; $i < $btnCount; $i++) {
-            $btn = $buttons[$i];
-            if (!is_array($btn)) continue;
-            $cond = $btn['condition'] ?? null;
-            if ($cond !== null && !is_array($cond)) continue;
-            if ($cond !== null && $this->rootComponent !== null && !$this->rootComponent->evalCondition($cond)) continue;
-            $layer = $btn['layer'] ?? 0;
-            if ($layer > $maxLayer) $maxLayer = $layer;
-        }
-
-        // Phase 2: 从最高层向下逆序命中测试
-        for ($l = $maxLayer; $l >= 0; $l--) {
-            for ($i = $btnCount - 1; $i >= 0; $i--) {
-                $btn = $buttons[$i];
-                if (!is_array($btn)) continue;
-                $btnLayer = $btn['layer'] ?? 0;
-                if ($btnLayer !== $l) continue;
-                $cond = $btn['condition'] ?? null;
-                if ($btnLayer < $maxLayer && $cond !== null) continue;
-                if ($cond !== null && !is_array($cond)) continue;
-                if ($cond !== null && $this->rootComponent !== null && !$this->rootComponent->evalCondition($cond)) continue;
-
-                $btnX = $btn['x'] ?? 0;
-                $btnY = $btn['y'] ?? 0;
-                $btnW = $btn['w'] ?? 0;
-                $btnH = $btn['h'] ?? 0;
-
-                if ($x >= $btnX && $x < $btnX + $btnW &&
-                    $y >= $btnY && $y < $btnY + $btnH) {
-                    $this->dispatchClick($btn);
-                    return;
-                }
-            }
+        // Find the topmost button VNode at click position
+        $hit = $this->findHitButton($this->activeVNodeTree, $x, $y);
+        if ($hit !== null) {
+            $this->dispatchVNodeClick($hit);
         }
     }
 
     /**
-     * v6 M5: 处理鼠标滚轮滚动
-     * @param int $delta 滚轮增量 (正=向上, 负=向下)
+     * Walk the VNode tree to find a button at the click position.
+     *
+     * Layer-aware two-phase algorithm:
+     *   1. Collect ALL nodes (clickable + non-clickable) covering the click point
+     *   2. Determine max active layer among all covering nodes
+     *   3. Return the last (topmost in tree order) clickable node on that layer
+     *
+     * Higher-layer non-clickable elements (overlays) naturally block
+     * lower-layer buttons — no need for manual @click on overlays.
      */
+    private function findHitButton(VNode $node, int $x, int $y): ?VNode
+    {
+        // Phase 1: Collect all covering nodes with layer info
+        // Parent layer cascades: children inherit max(child.layer, parentLayer)
+        $candidates = [];
+        $this->collectCoveringNodes($node, $x, $y, 0, $candidates);
+
+        if (count($candidates) === 0) return null;
+
+        // Phase 2: Find max layer among all covering nodes
+        $maxLayer = 0;
+        foreach ($candidates as $c) {
+            if ($c['layer'] > $maxLayer) $maxLayer = $c['layer'];
+        }
+
+        // Phase 3: Find clickable node on maxLayer (last in tree order wins)
+        $hit = null;
+        foreach ($candidates as $c) {
+            if ($c['clickable'] && $c['layer'] >= $maxLayer) {
+                $hit = $c['node'];
+            }
+        }
+
+        return $hit;
+    }
+
+    /**
+     * Recursively collect all nodes covering the click point into candidates.
+     *
+     * @param int $parentLayer Accumulated parent layer — children inherit
+     *                         effective layer = max(node->layer, parentLayer)
+     *
+     * Each candidate has: ['node' => VNode, 'layer' => int, 'clickable' => bool]
+     */
+    private function collectCoveringNodes(VNode $node, int $x, int $y, int $parentLayer, array &$candidates): void
+    {
+        // Check v-if condition: skip invisible subtrees
+        $vif = ($node->props !== null) ? ($node->props['v-if'] ?? '') : '';
+        if ($vif !== '' && $this->rootComponent !== null && method_exists($this->rootComponent, 'getBindValue')) {
+            $cond = $this->rootComponent->getBindValue($vif);
+            if (!$cond) return;
+        }
+
+        // Compute effective layer (own layer or inherited from parent)
+        $effectiveLayer = max($node->layer, $parentLayer);
+
+        // Recurse into children first (deeper nodes are on top)
+        if ($node->children instanceof VNode) {
+            $this->collectCoveringNodes($node->children, $x, $y, $effectiveLayer, $candidates);
+        } elseif (is_array($node->children)) {
+            foreach ($node->children as $child) {
+                if ($child instanceof VNode) {
+                    $this->collectCoveringNodes($child, $x, $y, $effectiveLayer, $candidates);
+                }
+            }
+        }
+
+        // Check if current node covers the click point
+        $nx = $node->x;
+        $ny = $node->y;
+        $nw = $node->w;
+        $nh = $node->h;
+
+        // Apply scroll container offset
+        foreach ($this->scrollContainers as $sc) {
+            if ($this->isInsideScrollContainer($node, $sc)) {
+                $ny -= $sc->scrollTop;
+            }
+        }
+
+        if ($nw > 0 && $nh > 0 &&
+            $x >= $nx && $x < $nx + $nw &&
+            $y >= $ny && $y < $ny + $nh) {
+
+            $isClickable = ($node->type === 'button' || ($node->type === 'div' && isset($node->props['@click'])));
+
+            $candidates[] = [
+                'node'      => $node,
+                'layer'     => $effectiveLayer,
+                'clickable' => $isClickable,
+            ];
+        }
+    }
+
+    /**
+     * Check if a VNode is a child of a scroll container.
+     */
+    private function isInsideScrollContainer(VNode $node, VNode $container): bool
+    {
+        if ($node === $container) return false;
+        if ($node->x >= $container->x && $node->x < $container->x + $container->w &&
+            $node->y >= $container->y - $container->scrollTop &&
+            $node->y + $node->h <= $container->y + $container->h - $container->scrollTop) {
+            return true;
+        }
+        return false;
+    }
+
+    /**
+     * Dispatch click from a VNode button.
+     */
+    private function dispatchVNodeClick(VNode $btn): void
+    {
+        if ($this->rootComponent === null) return;
+
+        $handler = $btn->props['@click'] ?? '';
+        $arg = $btn->props['click-arg'] ?? null;
+
+        if ($handler === '') return;
+
+        $this->rootComponent->dispatchClick($handler, $arg);
+    }
+
+    // ============================================================
+    // 滚动处理
+    // ============================================================
+
+    private function handleScrollBarClick(int $x, int $y): bool
+    {
+        if ($this->rootComponent === null) return false;
+
+        foreach ($this->scrollContainers as $sc) {
+            $sx = $sc->x;
+            $sy = $sc->y;
+            $sw = $sc->w;
+            $sh = $sc->h;
+
+            // Check if click is in scrollbar area (right 12px of container)
+            $thumbW = 8;
+            $thumbX = $sx + $sw - $thumbW;
+
+            if ($x < $thumbX || $x > $thumbX + $thumbW) continue;
+            if ($y < $sy || $y > $sy + $sh) continue;
+
+            $scrollTopBind = $sc->props[':scroll-top'] ?? '';
+            if ($scrollTopBind === '') continue;
+
+            // Calculate new scroll position
+            $contentH = max($sc->contentHeight, 1);
+            $maxScrollTop = max(0, $contentH - $sh);
+            if ($maxScrollTop <= 0) return false;
+
+            $ratio = ($y - $sy) / max($sh, 1);
+            $newScrollTop = (int)($ratio * $maxScrollTop);
+            $newScrollTop = max(0, min($newScrollTop, $maxScrollTop));
+
+            if ($newScrollTop !== $sc->scrollTop) {
+                if (method_exists($this->rootComponent, 'setBindValue')) {
+                    $this->rootComponent->setBindValue($scrollTopBind, (string)$newScrollTop);
+                }
+                $this->rootComponent->dirty = true;
+            }
+            return true;
+        }
+
+        return false;
+    }
+
     private function handleScroll(int $delta): void
     {
         if ($this->rootComponent === null) return;
 
-        $layout = $this->getActiveLayout();
-        $elements = (array)($layout['elements'] ?? []);
+        if (count($this->scrollContainers) === 0) return;
 
-        // Find scroll-container element
-        $scrollEl = null;
-        $elCount = count($elements);
-        for ($i = 0; $i < $elCount; $i++) {
-            $el = $elements[$i];
-            if (!is_array($el)) continue;
-            if (($el['type'] ?? '') === 'scroll-container') {
-                $scrollEl = $el;
-                break;
-            }
-        }
-
-        if ($scrollEl === null) return;
-
-        $containerH = $scrollEl['h'] ?? 0;
-        $contentH = $scrollEl['content-height'] ?? 0;
-        $maxScrollTop = max(0, $contentH - $containerH);
-
-        if ($maxScrollTop <= 0) return; // Content fits, no scrolling needed
-
-        // WHEEL_DELTA = 120, each notch scrolls ~40px
-        $scrollAmount = (int)($delta / 120) * 40;
-        $scrollTopBind = $scrollEl['scroll-top-bind'] ?? '';
+        $sc = $this->scrollContainers[0];
+        $scrollTopBind = $sc->props[':scroll-top'] ?? '';
         if ($scrollTopBind === '') return;
 
-        $currentScrollTop = (int)$this->rootComponent->getBindValue($scrollTopBind);
-        $newScrollTop = $currentScrollTop - $scrollAmount; // delta>0 scrolls up
+        $contentH = max($sc->contentHeight, 1);
+        $maxScrollTop = max(0, $contentH - $sc->h);
+        if ($maxScrollTop <= 0) return;
+
+        // Each notch = ~40px
+        $scrollAmount = (int)(abs($delta) / 120) * 40;
+        if ($delta > 0) $scrollAmount = -$scrollAmount;
+
+        $newScrollTop = $sc->scrollTop + $scrollAmount;
         $newScrollTop = max(0, min($newScrollTop, $maxScrollTop));
 
-        if ($newScrollTop !== $currentScrollTop) {
-            $this->rootComponent->setBindValue($scrollTopBind, (string)$newScrollTop);
+        if ($newScrollTop !== $sc->scrollTop) {
+            if (method_exists($this->rootComponent, 'setBindValue')) {
+                $this->rootComponent->setBindValue($scrollTopBind, (string)$newScrollTop);
+            }
             $this->rootComponent->dirty = true;
         }
     }
 
-    /**
-     * 分发按钮点击到根组件
-     */
-    private function dispatchClick(array $btn): void
-    {
-        if ($this->rootComponent !== null) {
-            // v6 M8 FIX: Use list_index as the actual item index for deletion
-            // This fixes the issue where scrolling causes slot->item mismatch
-            $listIndex = $btn['list_index'] ?? -1;
-            $scrollTop = 0;
-            $itemHeight = 50;
-            $itemsBind = '';
+    // ============================================================
+    // 键盘处理
+    // ============================================================
 
-            // Get scroll info from layout
-            $layout = $this->getActiveLayout();
-            $elements = (array)($layout['elements'] ?? []);
-            for ($i = 0; $i < count($elements); $i++) {
-                $el = $elements[$i];
-                if (($el['type'] ?? '') === 'scroll-container') {
-                    $scrollTopBind = $el['scroll-top-bind'] ?? '';
-                    if ($scrollTopBind !== '' && $this->rootComponent !== null) {
-                        $scrollTop = (int)$this->rootComponent->getBindValue($scrollTopBind);
-                    }
-                    $itemHeight = $el['item-height'] ?? 50;
-                    break;
-                }
-            }
-
-            // For scroll-container children, compute actual item index
-            if (($btn['scroll-container'] ?? false) && $listIndex >= 0) {
-                $baseIndex = (int)($scrollTop / $itemHeight);
-                $actualItemIndex = $listIndex - $baseIndex;
-                // Override arg with actual item index for deleteItem handler
-                if ($btn['handler'] === 'deleteItem') {
-                    $btn['arg'] = (string)$actualItemIndex;
-                }
-            }
-
-            $this->rootComponent->dispatchClick($btn);
-        }
-    }
-
-    /**
-     * v6 M4: 处理键盘事件
-     *
-     * @param int $msgType WM_KEYDOWN, WM_KEYUP, WM_CHAR
-     * @param int $wParam 键码
-     */
     private function handleKeyboard(int $msgType, int $wParam): void
     {
-        // 如果没有焦点 textbox，尝试设置焦点
-        if ($this->focusedTextBox === null) {
-            $this->tryFocusTextBox();
-            if ($this->focusedTextBox === null) {
-                return;
-            }
-        }
-
-        $el = $this->focusedTextBox;
-        $bindKey = $el['bind'] ?? '';
-        if ($bindKey === '') return;
-
-        // v6 M5: Tab 键导航支持 (Shift+Tab = 0x0F, Tab = 0x09)
-        if ($msgType === WinMsg::WM_KEYDOWN && ($wParam === 0x09 || $wParam === 0x0F)) {
-            // Tab 或 Shift+Tab - 移动焦点到下一个/上一个元素
-            // 简单实现: 如果是 Shift+Tab 或 Tab，直接处理
-            // 完整实现需要 FocusManager
-            if ($wParam === 0x09) {
-                // Tab: 下一个 - 在列表应用中移动到下一个删除按钮
-            } else {
-                // Shift+Tab: 上一个
-            }
-            // 更新渲染以显示焦点变化
-            if ($this->rootComponent !== null) {
-                $this->rootComponent->dirty = true;
-            }
+        // Handle keyboard navigation (Up/Down arrows for scrolling)
+        if ($msgType === WinMsg::WM_KEYDOWN && $this->focusedInput === null) {
+            $this->handleKeyboardNavigation($wParam);
             return;
         }
 
+        // Try to focus an input if none focused
+        if ($this->focusedInput === null) {
+            $this->tryFocusInput();
+            if ($this->focusedInput === null) return;
+        }
+
+        $el = $this->focusedInput;
+        $bindKey = $el->props['v-model'] ?? '';
+        if ($bindKey === '') return;
+
         if ($msgType === WinMsg::WM_CHAR) {
-            // 可打印字符输入
             $char = chr($wParam & 0xFF);
             if (ctype_print($char) || $char === ' ') {
                 $this->appendText($bindKey, $char);
             }
         } elseif ($msgType === WinMsg::WM_KEYDOWN) {
             if ($wParam === WinMsg::VK_BACK) {
-                // 退格键
                 $this->deleteTextChar($bindKey);
             } elseif ($wParam === WinMsg::VK_DELETE) {
-                // Delete 键（向右删除）
                 $this->deleteTextChar($bindKey, true);
             } elseif ($wParam === WinMsg::VK_RETURN || $wParam === WinMsg::VK_ESCAPE) {
-                // Enter/Escape 处理
-                $handler = $el['enterHandler'] ?? '';
+                $handler = $el->props['@enter'] ?? '';
                 if ($handler !== '' && $this->rootComponent !== null) {
-                    // AOT 安全：显式 if 分支处理已知处理器
-                    if ($handler === 'handleEnterKey') {
-                        $this->rootComponent->handleEnterKey($wParam);
-                    } elseif ($handler === 'handleEscapeKey') {
-                        $this->rootComponent->handleEscapeKey($wParam);
-                    }
-                }
-            } else {
-                // 方向键等特殊键，传递给自定义处理器
-                $handler = $el['keyHandler'] ?? '';
-                if ($handler !== '' && $this->rootComponent !== null) {
-                    if ($handler === 'handleArrowKey') {
-                        $this->rootComponent->handleArrowKey($wParam);
-                    }
+                    $this->rootComponent->dispatchClick($handler, null);
                 }
             }
         }
 
-        // 更新渲染（文本变化后标记 dirty）
         if ($this->rootComponent !== null) {
             $this->rootComponent->dirty = true;
         }
     }
 
-    /**
-     * v6 M4: 尝试将焦点设置到最近的 textbox 元素
-     */
-    private function tryFocusTextBox(): void
+    private function handleKeyboardNavigation(int $wParam): void
     {
-        $layout = $this->getActiveLayout();
-        $elements = (array)($layout['elements'] ?? []);
+        if ($this->rootComponent === null) return;
+        if (count($this->scrollContainers) === 0) return;
 
-        // 逆序遍历找最后一个 textbox
-        $elCount = count($elements);
-        for ($i = $elCount - 1; $i >= 0; $i--) {
-            $el = $elements[$i];
-            if (!is_array($el)) continue;
-            if (($el['type'] ?? '') !== 'textbox') continue;
+        $sc = $this->scrollContainers[0];
+        $scrollTopBind = $sc->props[':scroll-top'] ?? '';
+        if ($scrollTopBind === '') return;
 
-            // 检查条件
-            $cond = $el['condition'] ?? null;
-            if ($cond !== null && !is_array($cond)) continue;
-            if ($cond !== null && $this->rootComponent !== null && !$this->rootComponent->evalCondition($cond)) continue;
+        $contentH = max($sc->contentHeight, 1);
+        $maxScrollTop = max(0, $contentH - $sc->h);
+        if ($maxScrollTop <= 0) return;
 
-            $this->focusedTextBox = $el;
-            $this->focusedId = $el['bind'] ?? '';
-            return;
+        $itemHeight = 50; // default
+        $scrollAmount = $itemHeight;
+
+        $newScrollTop = $sc->scrollTop;
+
+        switch ($wParam) {
+            case 0x26: // VK_UP
+                $newScrollTop -= $scrollAmount;
+                break;
+            case 0x28: // VK_DOWN
+                $newScrollTop += $scrollAmount;
+                break;
+            case 0x21: // VK_PRIOR
+                $newScrollTop -= $sc->h;
+                break;
+            case 0x22: // VK_NEXT
+                $newScrollTop += $sc->h;
+                break;
+            case 0x24: // VK_HOME
+                $newScrollTop = 0;
+                break;
+            case 0x23: // VK_END
+                $newScrollTop = $maxScrollTop;
+                break;
+            default:
+                return;
+        }
+
+        $newScrollTop = max(0, min($newScrollTop, $maxScrollTop));
+
+        if ($newScrollTop !== $sc->scrollTop) {
+            if (method_exists($this->rootComponent, 'setBindValue')) {
+                $this->rootComponent->setBindValue($scrollTopBind, (string)$newScrollTop);
+            }
+            $this->rootComponent->dirty = true;
         }
     }
 
-    /**
-     * v6 M4: 向绑定文本追加字符
-     */
+    private function tryFocusInput(): void
+    {
+        if ($this->activeVNodeTree === null) return;
+        $this->focusedInput = $this->findFirstInput($this->activeVNodeTree);
+        if ($this->focusedInput !== null) {
+            $this->focusedId = $this->focusedInput->props['v-model'] ?? '';
+        }
+    }
+
+    private function findFirstInput(VNode $node): ?VNode
+    {
+        if ($node->type === 'input') return $node;
+
+        if ($node->children instanceof VNode) {
+            $found = $this->findFirstInput($node->children);
+            if ($found !== null) return $found;
+        } elseif (is_array($node->children)) {
+            foreach ($node->children as $child) {
+                if ($child instanceof VNode) {
+                    $found = $this->findFirstInput($child);
+                    if ($found !== null) return $found;
+                }
+            }
+        }
+        return null;
+    }
+
     private function appendText(string $bindKey, string $char): void
     {
         if ($this->rootComponent === null) return;
         if (!method_exists($this->rootComponent, 'setBindValue')) return;
+        if (!method_exists($this->rootComponent, 'getBindValue')) return;
 
         $currentValue = $this->rootComponent->getBindValue($bindKey);
         $newValue = $currentValue . $char;
         $this->rootComponent->setBindValue($bindKey, $newValue);
     }
 
-    /**
-     * v6 M4: 删除绑定文本的最后一个字符
-     */
     private function deleteTextChar(string $bindKey, bool $forward = false): void
     {
         if ($this->rootComponent === null) return;
         if (!method_exists($this->rootComponent, 'setBindValue')) return;
+        if (!method_exists($this->rootComponent, 'getBindValue')) return;
 
         $currentValue = $this->rootComponent->getBindValue($bindKey);
         if (strlen($currentValue) === 0) return;
 
-        if ($forward) {
-            // Delete: 删除光标后的字符（暂不支持光标位置，简化为删除最后一个）
-            $newValue = substr($currentValue, 0, -1);
-        } else {
-            // Backspace: 删除最后一个字符
-            $newValue = substr($currentValue, 0, -1);
-        }
+        $newValue = substr($currentValue, 0, -1);
         $this->rootComponent->setBindValue($bindKey, $newValue);
     }
 }

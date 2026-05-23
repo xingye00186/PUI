@@ -32,7 +32,7 @@ function main(): int
 
     // 2. 初始化窗口，获取 hWnd
     $hWnd = vue_window_create(
-        'SFC Data-Driven App',
+        'VueCalc',
         WINDOW_WIDTH,
         WINDOW_HEIGHT
     );

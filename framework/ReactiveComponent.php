@@ -66,37 +66,50 @@ abstract class ReactiveComponent extends BaseComponent
     // ===== 子类必须实现的抽象方法 =====
 
     /**
-     * 获取绑定值（用于文本渲染）
+     * 渲染组件，返回 VNode 树
      *
-     * @param string $bindKey 绑定键名
-     * @return string 绑定的值
+     * 替代旧的 getLayout() + getBindValue() + evalCondition() 三位一体。
+     * SFC 编译器生成的子类实现此方法，使用 VNode::h() 构建 VNode 树。
+     *
+     * @return VNode 根节点 (type='#root')
      */
-    abstract public function getBindValue(string $bindKey): string;
+    abstract public function render(): VNode;
 
     /**
-     * v6 M4: 设置绑定值（用于 v-model 双向绑定）
+     * 事件分发 (由 SFC 编译器生成，使用 match 表达式)
+     *
+     * Application 调用此方法处理用户交互事件。
+     * 签名变更: 从 dispatchClick(array $btn) 变为 dispatchClick(string $handler, ?string $arg)
+     *
+     * @param string $handler 事件处理器名
+     * @param string|null $arg 事件参数 (来自 @click="handler('arg')")
+     */
+    public function dispatchClick(string $handler, ?string $arg = null): void
+    {
+        // 默认空实现，SFC 编译器生成覆盖方法使用 match
+    }
+
+    /**
+     * 设置绑定值 (由 SFC 编译器生成，支持 v-model / :bind)
      *
      * @param string $bindKey 绑定键名
      * @param string $value 新值
      */
     public function setBindValue(string $bindKey, string $value): void
     {
-        // AOT 安全：不使用动态属性访问
+        // 默认空实现，SFC 编译器生成覆盖方法
         // 子类通过 SFC 编译器生成覆盖方法，编译期已解析所有绑定属性
     }
 
     /**
-     * 处理按钮点击
+     * 读取绑定值 (由 SFC 编译器生成，支持 v-model / :bind)
      *
-     * @param array $btn 按钮数据
+     * @param string $bindKey 绑定键名
+     * @return string 当前值
      */
-    abstract public function dispatchClick(array $btn): void;
-
-    /**
-     * 求值条件表达式
-     *
-     * @param array $cond 条件数组 ['prop' => 'xxx', 'op' => 'truthy', 'value' => 'xxx']
-     * @return bool 条件结果
-     */
-    abstract public function evalCondition(array $cond): bool;
+    public function getBindValue(string $bindKey): string
+    {
+        // 默认空实现，SFC 编译器生成覆盖方法
+        return '';
+    }
 }

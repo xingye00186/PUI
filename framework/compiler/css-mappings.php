@@ -68,6 +68,39 @@ class CssMappings
         ],
     ];
 
+    /**
+     * Inline style → 布局属性映射 (用于 parseInlineStyle)
+     *
+     * 这些属性不出现在 <style> 块中, 而是在元素的 style="..." 属性里。
+     * 解析后存入 VNode.computedStyle 数组。
+     */
+    const INLINE_PROPERTY_MAP = [
+        'width'            => ['key' => 'width',            'parser' => 'CssMappings::parsePixels', 'default' => 0],
+        'height'           => ['key' => 'height',           'parser' => 'CssMappings::parsePixels', 'default' => 0],
+        'left'             => ['key' => 'left',             'parser' => 'CssMappings::parsePixels', 'default' => 0],
+        'top'              => ['key' => 'top',              'parser' => 'CssMappings::parsePixels', 'default' => 0],
+        'right'            => ['key' => 'right',            'parser' => 'CssMappings::parsePixels', 'default' => 0],
+        'bottom'           => ['key' => 'bottom',           'parser' => 'CssMappings::parsePixels', 'default' => 0],
+        'display'          => ['key' => 'display',          'parser' => 'CssMappings::parseIdent',  'default' => 'block'],
+        'flex-direction'   => ['key' => 'flexDirection',    'parser' => 'CssMappings::parseIdent',  'default' => 'row'],
+        'flex-wrap'        => ['key' => 'flexWrap',         'parser' => 'CssMappings::parseIdent',  'default' => 'nowrap'],
+        'justify-content'  => ['key' => 'justifyContent',   'parser' => 'CssMappings::parseIdent',  'default' => 'flex-start'],
+        'align-items'      => ['key' => 'alignItems',       'parser' => 'CssMappings::parseIdent',  'default' => 'stretch'],
+        'align-content'    => ['key' => 'alignContent',     'parser' => 'CssMappings::parseIdent',  'default' => 'stretch'],
+        'gap'              => ['key' => 'gap',              'parser' => 'CssMappings::parsePixels', 'default' => 0],
+        'overflow'         => ['key' => 'overflow',         'parser' => 'CssMappings::parseIdent',  'default' => 'visible'],
+        'overflow-x'       => ['key' => 'overflowX',        'parser' => 'CssMappings::parseIdent',  'default' => 'visible'],
+        'overflow-y'       => ['key' => 'overflowY',        'parser' => 'CssMappings::parseIdent',  'default' => 'visible'],
+        'position'         => ['key' => 'position',         'parser' => 'CssMappings::parseIdent',  'default' => 'static'],
+        'z-index'          => ['key' => 'zIndex',           'parser' => 'CssMappings::parsePixels', 'default' => 0],
+        'grid-template-columns' => ['key' => 'gridTemplateColumns', 'parser' => 'CssMappings::parseIdent', 'default' => ''],
+        'grid-template-rows'    => ['key' => 'gridTemplateRows',    'parser' => 'CssMappings::parseIdent', 'default' => ''],
+        'grid-column-gap'      => ['key' => 'gridColumnGap', 'parser' => 'CssMappings::parsePixels', 'default' => 0],
+        'grid-row-gap'         => ['key' => 'gridRowGap',    'parser' => 'CssMappings::parsePixels', 'default' => 0],
+        'grid-row'             => ['key' => 'gridRow',       'parser' => 'CssMappings::parseIdent',  'default' => ''],
+        'grid-column'          => ['key' => 'gridColumn',    'parser' => 'CssMappings::parseIdent',  'default' => ''],
+    ];
+
     // ============================================================
     // Color helpers
     // ============================================================
@@ -150,6 +183,126 @@ class CssMappings
         return 'left';
     }
 
+    /**
+     * Parse identity: return the trimmed value as-is
+     * Used for display, flex-direction, overflow, position 等关键字属性
+     */
+    public static function parseIdent(string $value): string
+    {
+        return trim(strtolower($value));
+    }
+
+    /**
+     * AOT-compatible parser dispatcher.
+     * Replaces call_user_func() which is not supported by AOT.
+     */
+    private static function dispatchParser(string $parser, string $value): mixed
+    {
+        switch ($parser) {
+            case 'CssMappings::parseHexColor':   return self::parseHexColor($value);
+            case 'CssMappings::parsePixels':     return self::parsePixels($value);
+            case 'CssMappings::parseFontWeight': return self::parseFontWeight($value);
+            case 'CssMappings::parseTextAlign':  return self::parseTextAlign($value);
+            case 'CssMappings::parseIdent':      return self::parseIdent($value);
+            default:                             return $value;
+        }
+    }
+
+    // ============================================================
+    // Inline Style Parsing (HTML style="..." attribute)
+    // ============================================================
+
+    /**
+     * Parse an HTML inline style string into a key-value array.
+     *
+     * Handles both layout properties (width, height, left, top, display, etc.)
+     * AND visual properties (background, color, font-size, etc.).
+     *
+     * Example:
+     *   "width:400px;height:500px;left:10px;top:50px;display:flex;gap:8px"
+     *   → ['width' => 400, 'height' => 500, 'left' => 10, 'top' => 50, 'display' => 'flex', 'gap' => 8]
+     *
+     * @param string $styleStr Raw style attribute value
+     * @return array  ['propName' => parsedValue, ...]
+     */
+    public static function parseInlineStyle(string $styleStr): array
+    {
+        $style = [];
+
+        // Parse declarations: property: value; property: value; ...
+        // Supports vendor prefixes (e.g., -webkit-appearance) via leading dash in prop name
+        if (!preg_match_all('#([a-zA-Z-][a-zA-Z0-9_-]*)\s*:\s*([^;]+)\s*(?:!important)?\s*;?#', $styleStr, $m, PREG_SET_ORDER)) {
+            return $style;
+        }
+
+        // Merge both PROPERTY_MAP and INLINE_PROPERTY_MAP for lookup
+        $lookup = array_merge(self::PROPERTY_MAP, self::INLINE_PROPERTY_MAP);
+
+        foreach ($m as $decl) {
+            $propName = strtolower(trim($decl[1]));
+            $value    = trim($decl[2]);
+
+            $map = $lookup[$propName] ?? null;
+            if ($map !== null) {
+                $style[$map['key']] = self::dispatchParser($map['parser'], $value);
+            } else {
+                // Unknown properties are kept as raw strings
+                $style[$propName] = $value;
+            }
+        }
+
+        return $style;
+    }
+
+    /**
+     * Parse grid-template-columns / grid-template-rows value.
+     *
+     * Examples:
+     *   "repeat(4, 80px)" → ['repeat' => true, 'count' => 4, 'size' => 80]
+     *   "1fr 1fr 1fr 1fr" → ['type' => 'explicit', 'sizes' => ['1fr','1fr','1fr','1fr']]
+     *   "auto"            → ['type' => 'auto']
+     *
+     * @param string $val Raw CSS value
+     * @return array
+     */
+    public static function parseGridTemplateValue(string $val): array
+    {
+        $val = trim($val);
+
+        // match "repeat(N, SIZE)" — SIZE can be px, fr, % or bare number
+        if (preg_match('/^repeat\(\s*(\d+)\s*,\s*(\d+(?:\.\d+)?)(px|fr|%|)\s*\)$/i', $val, $m)) {
+            $unit = strtolower($m[3] ?? '');
+            $size = (float)$m[2];
+            // Keep as float if 'fr', else convert to int for px
+            return ['repeat' => true, 'count' => (int)$m[1], 'size' => ($unit === 'fr' || $unit === '%') ? $size : (int)$size, 'unit' => $unit];
+        }
+
+        // match complex repeat: repeat(N, minmax(...)) or repeat(N, calc(...))
+        if (preg_match('/^repeat\(\s*(\d+)\s*,\s*(.+)\)$/i', $val, $m)) {
+            return ['repeat' => true, 'count' => (int)$m[1], 'track' => trim($m[2])];
+        }
+
+        // match "auto"
+        if (strtolower($val) === 'auto') {
+            return ['type' => 'auto'];
+        }
+
+        // match "1fr 1fr 1fr 1fr" or "100px 1fr auto"
+        $parts = preg_split('/\s+/', $val);
+        $sizes = [];
+        foreach ($parts as $part) {
+            if ($part !== '') {
+                $sizes[] = $part;
+            }
+        }
+
+        if (count($sizes) > 0) {
+            return ['type' => 'explicit', 'sizes' => $sizes];
+        }
+
+        return ['type' => 'none'];
+    }
+
     // ============================================================
     // Block-level parsing
     // ============================================================
@@ -178,7 +331,7 @@ class CssMappings
                 $pattern = '~' . preg_quote($cssProp, '~') . '\s*:\s*([^;]+)~';
                 if (preg_match($pattern, $body, $m)) {
                     $value = trim($m[1]);
-                    $props[$map['key']] = call_user_func($map['parser'], $value);
+                    $props[$map['key']] = self::dispatchParser($map['parser'], $value);
                 }
             }
 

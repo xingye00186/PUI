@@ -6,7 +6,7 @@ use native_types;
  * BaseComponent - 组件基类
  *
  * 提供组件树结构的基础实现，支持父子组件引用、子组件管理和属性配置。
- * 子类需要实现 getLayout() 方法返回布局数据。
+ * 子类需要实现 render() 方法返回 VNode 树。
  *
  * AOT 兼容性:
  *   - 使用 strval() 确保字符串类型
@@ -103,7 +103,7 @@ abstract class BaseComponent implements ComponentInterface
 
     // ===== 子类必须实现的方法 =====
 
-    abstract public function getLayout(): array;
+    abstract public function render(): VNode;
     abstract public function onMount(): void;
     abstract public function onUnmount(): void;
 }

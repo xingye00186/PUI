@@ -1,25 +1,23 @@
 <template>
-  <app title="VueCalc" width="328" height="420">
+  <div id="app" style="width:328px;height:420px" title="VueCalc">
     <!-- 应用背景 -->
-    <rect x="0" y="0" w="328" h="420" class="app-bg" />
+    <div style="left:0px;top:0px;width:328px;height:420px" class="app-bg"></div>
 
     <!-- 显示面板（子组件 DisplayPanel） -->
-    <display-panel x="4" y="4" :value="display" />
+    <display-panel style="left:4px;top:4px" :value="display" />
 
     <!-- 表达式文本（小号，左上角，灰色） -->
-    <text x="10" y="10" v-model="expression" v-if="expression" class="expr-text" align="left" />
+    <span style="left:10px;top:10px;text-align:left" v-model="expression" v-if="expression" class="expr-text">{{ expression }}</span>
 
-    <!-- 数字键盘（子组件 NumPad） — 弹窗显示时隐藏 -->
-    <num-pad x="0" y="80" />
+    <!-- 数字键盘（子组件 NumPad） -->
+    <num-pad style="left:0px;top:80px" />
 
-    <!-- About 按钮（? 切换弹窗）—— 弹窗显示时隐藏 -->
-    <grid x="290" y="38" cols="1" rows="1" cell-w="30" cell-h="28" margin="0">
-      <btn row="0" col="0" label="?" class="btn-func" @click="toggleAboutDialog" />
-    </grid>
+    <!-- About 按钮（?） -->
+    <button style="left:290px;top:38px;width:30px;height:28px" class="btn-func" @click="toggleAboutDialog">?</button>
 
     <!-- 关于弹窗（子组件 AboutDialog） -->
-    <about-dialog x="0" y="0" overlay v-if="showDialog" />
-  </app>
+    <about-dialog style="left:0px;top:0px" overlay v-if="showDialog" />
+  </div>
 </template>
 
 <script lang="php">
@@ -106,7 +104,7 @@
     /** 执行计算 */
     public function calculate(): void
     {
-        if ($this->operator === '' || $this->operand1 === '') {
+        if ($this->operator === '' || $this->operand1 === '' || $this->newInput) {
             return;
         }
 

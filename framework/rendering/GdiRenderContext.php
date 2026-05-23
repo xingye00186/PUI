@@ -133,7 +133,7 @@ class GdiRenderContext extends RenderContext
             $el['border'] ?? 0
         );
 
-        // 绘制按钮文字（坐标已在 BaseRenderer 预处理）
+        // 绘制按钮文字（坐标已在 VNodeRenderer 预处理）
         $this->drawText(
             $el['labelX'] ?? 0,
             $el['labelY'] ?? 0,
