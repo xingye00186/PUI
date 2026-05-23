@@ -629,14 +629,21 @@ class Application
             } elseif ($wParam === WinMsg::VK_RETURN || $wParam === WinMsg::VK_ESCAPE) {
                 // Enter/Escape 处理
                 $handler = $el['enterHandler'] ?? '';
-                if ($handler !== '' && $this->rootComponent !== null && method_exists($this->rootComponent, $handler)) {
-                    $this->rootComponent->$handler($wParam);
+                if ($handler !== '' && $this->rootComponent !== null) {
+                    // AOT 安全：显式 if 分支处理已知处理器
+                    if ($handler === 'handleEnterKey') {
+                        $this->rootComponent->handleEnterKey($wParam);
+                    } elseif ($handler === 'handleEscapeKey') {
+                        $this->rootComponent->handleEscapeKey($wParam);
+                    }
                 }
             } else {
                 // 方向键等特殊键，传递给自定义处理器
                 $handler = $el['keyHandler'] ?? '';
-                if ($handler !== '' && $this->rootComponent !== null && method_exists($this->rootComponent, $handler)) {
-                    $this->rootComponent->$handler($wParam);
+                if ($handler !== '' && $this->rootComponent !== null) {
+                    if ($handler === 'handleArrowKey') {
+                        $this->rootComponent->handleArrowKey($wParam);
+                    }
                 }
             }
         }
