@@ -1,24 +1,24 @@
 @echo off
 setlocal enabledelayedexpansion
 :: ============================================================================
-::  build.bat — 非交互式构建脚本
+::  build.bat - Non-interactive Build Script
 ::
-::  用法:
-::    build.bat <app-name> [--run]
+::  Usage:
+::    build.bat ^<app-name^> [--run]
 ::    build.bat calculator
 ::    build.bat calculator --run
 ::
-::  退出码:
-::    0: 全部成功
-::    1: 参数错误或前置检查失败
-::    2: SFC 编译失败
-::    3: AOT 编译失败
-::    4: 打包失败
-::    5: 运行时崩溃 (--run 模式)
+::  Exit codes:
+::    0: All success
+::    1: Parameter error or pre-check failed
+::    2: SFC compile failed
+::    3: AOT compile failed
+::    4: Package failed
+::    5: Runtime crash (--run mode)
 :: ============================================================================
 
 :: --------------------------------------------------------------------------
-:: 参数检查
+:: Parameter check
 :: --------------------------------------------------------------------------
 if "%~1"=="" (
     echo Usage: build.bat ^<app-name^> [--run]
@@ -31,140 +31,157 @@ set "RUN_AFTER=0"
 if "%~2"=="--run" set "RUN_AFTER=1"
 
 :: --------------------------------------------------------------------------
-:: 路径计算 (全部基于 %~dp0)
+:: Path calculation (all relative to %~dp0)
 :: --------------------------------------------------------------------------
 
-:: 框架根 (本文件所在目录)
+:: Framework root (directory where this file is located)
 for %%a in ("%~dp0.") do set "FRAMEWORK_ROOT=%%~fa"
-:: 父目录 (框架根的上一级)
-for %%a in ("%~dp0..") do set "PARENT_DIR=%%~fa"
-:: 应用目录
+:: Apps directory
 set "APPS_DIR=%FRAMEWORK_ROOT%\apps"
 
-:: 通配符查找 swoole_compile* 目录 (版本号会变, 使用通配符自动匹配)
-:: 优先在框架根目录内查找, 其次在父目录查找
+:: --------------------------------------------------------------------------
+:: Read swoole_compiler path from config.yml
+:: --------------------------------------------------------------------------
+
+:: Default path
 set "COMPILER_DIR="
-for /d %%d in ("%FRAMEWORK_ROOT%\swoole_compile*") do (
-    set "COMPILER_DIR=%%d"
-)
-if not defined COMPILER_DIR (
-    for /d %%d in ("%PARENT_DIR%\swoole_compile*") do (
-        set "COMPILER_DIR=%%d"
-    )
+
+:: Read swoole_compiler path from config.yml
+set "SWOOLE_COMPILER_PATH="
+for /f "tokens=2" %%a in ('findstr /c:"swoole_compiler:" "%FRAMEWORK_ROOT%\config.yml"') do set "SWOOLE_COMPILER_PATH=%%a"
+
+:: Trim leading space (from delims=: token extraction)
+if defined SWOOLE_COMPILER_PATH (
+    for %%a in (!SWOOLE_COMPILER_PATH!) do set "SWOOLE_COMPILER_PATH=%%~a"
 )
 
-if not defined COMPILER_DIR (
-    echo [错误] 未找到 swoole_compile* 目录
-    echo   已搜索: %FRAMEWORK_ROOT%\
-    echo   已搜索: %PARENT_DIR%\
-    echo   请确保 swoole_compiler 文件夹在框架根目录或其父目录下
+:: Parse path: support absolute and relative
+if not defined SWOOLE_COMPILER_PATH (
+    echo [ERROR] swoole_compiler path not found in config.yml
     exit /b 1
 )
 
-:: 编译器路径 (从通配符匹配的目录获取)
+:: Check if absolute path (contains colon like C:\)
+echo !SWOOLE_COMPILER_PATH! | findstr /c:":" >nul 2>&1
+if !errorlevel! equ 0 (
+    set "COMPILER_DIR=!SWOOLE_COMPILER_PATH!"
+) else (
+    :: Relative path, based on framework root
+    set "COMPILER_DIR=!FRAMEWORK_ROOT!\!SWOOLE_COMPILER_PATH!"
+)
+
+if not exist "%COMPILER_DIR%\" (
+    echo [ERROR] swoole_compiler directory not found: %COMPILER_DIR%
+    echo   Please check path in config.yml
+    exit /b 1
+)
+
+:: Compiler paths
 set "PHP_CLI=%COMPILER_DIR%\php.exe"
 set "SWOOLE_COMPILER=%COMPILER_DIR%\swoole_compiler.exe"
 set "DLL_PHP=%COMPILER_DIR%\php8ts.dll"
 set "DLL_PHPX=%COMPILER_DIR%\phpx.dll"
 
-:: vcvarsall — 系统路径，如需修改请改此处
+:: Set environment variable for PHP scripts (used by vendor/autoload.php)
+set "SWOOLE_COMPILER_ROOT=%COMPILER_DIR%"
+
+:: vcvarsall - system path, change here if needed
 set "VCVARSALL=C:\Program Files\Microsoft Visual Studio\18\Community\VC\Auxiliary\Build\vcvarsall.bat"
 
 :: --------------------------------------------------------------------------
-:: 应用目录检查
+:: App directory check
 :: --------------------------------------------------------------------------
 set "APP_DIR=%APPS_DIR%\%APP_NAME%"
 
 if not exist "%APP_DIR%\" (
-    echo [错误] 应用目录不存在: %APP_DIR%
+    echo [ERROR] App directory not found: %APP_DIR%
     exit /b 1
 )
 if not exist "%APP_DIR%\project.yml" (
-    echo [错误] project.yml 不存在: %APP_DIR%\project.yml
+    echo [ERROR] project.yml not found: %APP_DIR%\project.yml
     exit /b 1
 )
 
 :: --------------------------------------------------------------------------
-:: 前置检查
+:: Pre-checks
 :: --------------------------------------------------------------------------
-chcp 65001 >nul 2>&1
 echo.
 echo ========================================
 echo   Non-interactive Build
-echo   应用: %APP_NAME%
-echo   框架: %FRAMEWORK_ROOT%
-echo   编译器: %COMPILER_DIR%
+echo   App: %APP_NAME%
+echo   Framework: %FRAMEWORK_ROOT%
+echo   Compiler: %COMPILER_DIR%
 echo ========================================
 echo.
 
 if not exist "%PHP_CLI%" (
-    echo [错误] PHP CLI 不存在: %PHP_CLI%
+    echo [ERROR] PHP CLI not found: %PHP_CLI%
     exit /b 1
 )
 if not exist "%SWOOLE_COMPILER%" (
-    echo [错误] Swoole Compiler 不存在: %SWOOLE_COMPILER%
+    echo [ERROR] Swoole Compiler not found: %SWOOLE_COMPILER%
     exit /b 1
 )
 
 :: --------------------------------------------------------------------------
-:: 解析应用配置
+:: Parse app config
 :: --------------------------------------------------------------------------
 
-:: 检测是否含 .vue 文件
+:: Check for .vue files
 set "HAS_VUE=0"
 if exist "%APP_DIR%\*.vue" set "HAS_VUE=1"
 for /r "%APP_DIR%" %%f in (*.vue) do set "HAS_VUE=1" 2>nul
 
-:: 读取 project.yml 的 name 字段获取 exe 名
+:: Read name from project.yml for exe name
 set "EXE_NAME=%APP_NAME%"
 for /f "tokens=2 delims=: " %%a in ('findstr /r "^name:" "%APP_DIR%\project.yml" 2^>nul') do (
     set "EXE_NAME=%%~a"
 )
 set "OUTPUT_EXE=%EXE_NAME%.exe"
 
-:: 获取 .vue 文件名 (用于 SFC 步骤)
+:: Get .vue filename (for SFC step)
 set "VUE_FILE="
 for %%f in ("%APP_DIR%\*.vue") do set "VUE_FILE=%%~nxf"
 
-:: 获取 .vue 文件 basename
+:: Get .vue basename
 set "VUE_BASE="
 if not "%VUE_FILE%"=="" (
     for %%f in ("%VUE_FILE%") do set "VUE_BASE=%%~nf"
 )
 if "%VUE_BASE%"=="" set "VUE_BASE=%EXE_NAME%"
 
-echo [配置] EXE: %OUTPUT_EXE%
-if "%HAS_VUE%"=="1" echo [配置] SFC: %VUE_FILE% -^> gen\%VUE_BASE%Component.php + gen\ComponentFactory.php
+echo [CONFIG] EXE: %OUTPUT_EXE%
+if "%HAS_VUE%"=="1" echo [CONFIG] SFC: %VUE_FILE% -^> gen\%VUE_BASE%Component.php + gen\ComponentFactory.php
 echo.
 
 :: ====================================================================
-:: Step 0: MSVC 编译环境
+:: Step 0: MSVC compile environment
 :: ====================================================================
 echo ========================================
-echo   Step 0: MSVC 编译环境
+echo   Step 0: MSVC compile environment
 echo ========================================
 echo.
 
 if exist "%VCVARSALL%" (
-    echo [初始化] 调用 vcvarsall.bat x64...
+    echo [INIT] Calling vcvarsall.bat x64...
     call "%VCVARSALL%" x64 >nul 2>&1
     if !errorlevel! neq 0 (
-        echo   [警告] MSVC 环境初始化失败
+        echo   [WARN] MSVC environment init failed
     ) else (
-        where cl >nul 2>&1 && echo   [OK] cl.exe 可用 || echo   [警告] cl.exe 未在 PATH 中
+        where cl >nul 2>&1 && echo   [OK] cl.exe available || echo   [WARN] cl.exe not in PATH
     )
 ) else (
-    echo   [警告] vcvarsall.bat 未找到: %VCVARSALL%
-    echo   如果 AOT 编译失败, 请在 Developer Command Prompt for VS 中运行
+    echo   [WARN] vcvarsall.bat not found: %VCVARSALL%
+    echo   If AOT build fails, run from Developer Command Prompt for VS
 )
 
 where cl >nul 2>&1
 if !errorlevel! neq 0 (
-    echo [错误] cl.exe 未在 PATH 中
+    echo [ERROR] cl.exe not in PATH
     echo.
-    echo   请通过以下任一方式解决:
-    echo     1. 从 "Developer Command Prompt for VS" 中运行本脚本
-    echo     2. 检查 VCVARSALL 路径是否正确: %VCVARSALL%
+    echo   Please resolve by:
+    echo     1. Run from 'Developer Command Prompt for VS'
+    echo     2. Check VCVARSALL path: %VCVARSALL%
     echo.
     exit /b 1
 )
@@ -172,10 +189,10 @@ echo   [OK] cl.exe available
 echo.
 
 :: ====================================================================
-:: Step 0.5: AOT 静态检查
+:: Step 0.5: AOT static check
 :: ====================================================================
 echo ========================================
-echo   Step 0.5: AOT 静态检查
+echo   Step 0.5: AOT static check
 echo ========================================
 echo.
 
@@ -184,20 +201,20 @@ cd /d "%FRAMEWORK_ROOT%"
 set "CHECK_EXIT=!errorlevel!"
 if !CHECK_EXIT! neq 0 (
     echo.
-    echo [错误] AOT Checker 发现问题，中止构建
-    echo   请修复上述错误后重新构建
+    echo [ERROR] AOT Checker found issues, aborting build
+    echo   Please fix errors and retry
     exit /b 1
 )
-echo   [完成] AOT 静态检查通过
+echo   [OK] AOT static check passed
 echo.
 
 :: ====================================================================
-:: Step 1: SFC 编译 (仅含 .vue 文件时)
+:: Step 1: SFC compile (only if .vue files exist)
 :: ====================================================================
 if "%HAS_VUE%"=="0" goto :skip_sfc
 
 echo ========================================
-echo   Step 1: SFC 编译 ^(Vue -^> .gen.php^)
+echo   Step 1: SFC compile ^(Vue -^> .gen.php^)
 echo ========================================
 echo   Input: %VUE_FILE%
 echo   Output: gen\%VUE_BASE%.gen.php
@@ -209,101 +226,102 @@ cd /d "%FRAMEWORK_ROOT%"
 set "SFC_EXIT=!errorlevel!"
 if !SFC_EXIT! neq 0 (
     echo.
-    echo [错误] SFC 编译失败, 错误码: !SFC_EXIT!
+    echo [ERROR] SFC compile failed, exit code: !SFC_EXIT!
     exit /b 2
 )
 
-:: 验证输出文件
+:: Verify output files
 cd /d "%APP_DIR%"
 if not exist "gen\%VUE_BASE%Component.php" (
-    echo [警告] SFC 输出缺失: gen\%VUE_BASE%Component.php
+    echo [WARN] SFC output missing: gen\%VUE_BASE%Component.php
 )
 if not exist "gen\ComponentFactory.php" (
-    echo [警告] SFC 输出缺失: gen\ComponentFactory.php
+    echo [WARN] SFC output missing: gen\ComponentFactory.php
 )
 
-echo   [完成] SFC 编译成功
+echo   [OK] SFC compile succeeded
 echo.
 goto :step2
 
 :skip_sfc
 echo ========================================
-echo   Step 1: SFC 编译 - 跳过 ^(无 .vue 文件^)
+echo   Step 1: SFC compile - skipped ^(no .vue file^)
 echo ========================================
 echo.
 
 :: ====================================================================
-:: Step 2: AOT 编译
+:: Step 2: AOT compile
 :: ====================================================================
 :step2
 echo ========================================
-echo   Step 2: AOT 编译 ^(PHP -^> exe^)
+echo   Step 2: AOT compile ^(PHP -^> exe^)
 echo ========================================
 echo   Config: apps\%APP_NAME%\project.yml
 echo   Output: %FRAMEWORK_ROOT%\%OUTPUT_EXE%
 echo.
 
-:: 再次确认 cl.exe
+:: Verify cl.exe still available
 where cl >nul 2>&1
 if !errorlevel! neq 0 (
-    echo [错误] cl.exe 在 SFC 步骤后丢失, 无法进行 AOT 编译
-    echo   请从 Developer Command Prompt for VS 中运行本脚本
+    echo [ERROR] cl.exe lost after SFC, cannot continue AOT
+    echo   Please run from Developer Command Prompt for VS
     exit /b 3
 )
 
-:: 确保 php8embed.lib 在编译器根目录 (swoole_compiler 仅搜索自身目录)
+:: Ensure php8embed.lib is in compiler root (swoole_compiler only searches its own directory)
 if not exist "%COMPILER_DIR%\php8embed.lib" (
     if exist "%COMPILER_DIR%\SDK\lib\php8embed.lib" (
         copy /Y "%COMPILER_DIR%\SDK\lib\php8embed.lib" "%COMPILER_DIR%\" >nul
-        echo   [Info] 已复制 php8embed.lib 到编译器目录
+        echo   [Info] Copied php8embed.lib to compiler dir
     ) else if exist "%COMPILER_DIR%\lib\php8embed.lib" (
         copy /Y "%COMPILER_DIR%\lib\php8embed.lib" "%COMPILER_DIR%\" >nul
-        echo   [Info] 已复制 php8embed.lib 到编译器目录
+        echo   [Info] Copied php8embed.lib to compiler dir
     ) else if exist "%COMPILER_DIR%\lib\lib\php8embed.lib" (
         copy /Y "%COMPILER_DIR%\lib\lib\php8embed.lib" "%COMPILER_DIR%\" >nul
-        echo   [Info] 已复制 php8embed.lib 到编译器目录
+        echo   [Info] Copied php8embed.lib to compiler dir
     ) else (
-        echo [错误] 找不到 php8embed.lib
-        echo   请将 php8embed.lib 放置在: %COMPILER_DIR%\
+        echo [ERROR] php8embed.lib not found
+        echo   Please place php8embed.lib in: %COMPILER_DIR%\
         exit /b 3
     )
 )
 
 cd /d "%FRAMEWORK_ROOT%"
+set "SWOOLE_COMPILER_ROOT=%COMPILER_DIR%"
 "%SWOOLE_COMPILER%" "apps\%APP_NAME%\project.yml" -f
-set "AOT_EXIT=!errorlevel!"
+set "AOT_EXIT=!errorlevel!
 if !AOT_EXIT! neq 0 (
     echo.
-    echo [错误] AOT 编译失败, 错误码: !AOT_EXIT!
+    echo [ERROR] AOT compile failed, exit code: !AOT_EXIT!
     echo.
-    echo   常见原因:
-    echo     1. MSVC [cl.exe] 未找到
-    echo        == 从 Developer Command Prompt for VS 运行本脚本
-    echo     2. 顶层游离代码 [require_once, include, 函数外的语句]
-    echo        == 所有代码必须在函数或类内部
-    echo     3. 变量先使用后定义
-    echo        == 确保变量有初始值
-    echo     4. 变量类型被改变 [int 变 string 等]
-    echo     5. 文件名含特殊字符 [仅允许 a-zA-Z0-9_]
+    echo   Common causes:
+    echo     1. MSVC [cl.exe] not found
+    echo        == Run from Developer Command Prompt for VS
+    echo     2. Top-level stray code [require_once, include]
+    echo        == All code must be in functions or classes
+    echo     3. Variable used before defined
+    echo        == Ensure all variables have initial values
+    echo     4. Variable type changed [int to string]
+    echo     5. Filename with special chars [only a-zA-Z0-9_]
     echo.
     exit /b 3
 )
 
-:: 验证输出 exe
+:: Verify output exe
 if not exist "%FRAMEWORK_ROOT%\%OUTPUT_EXE%" (
-    echo [错误] AOT 返回成功但未生成 exe: %FRAMEWORK_ROOT%\%OUTPUT_EXE%
-    echo   请检查 project.yml 的 name 字段: 当前为 "%EXE_NAME%"
+    echo [ERROR] AOT succeeded but exe not found: %FRAMEWORK_ROOT%\%OUTPUT_EXE%
+    echo   Please check name field in project.yml: "%EXE_NAME%"
     exit /b 3
 )
 
-echo   [完成] AOT 编译成功 ^(%OUTPUT_EXE%^)
+echo   [OK] AOT compile succeeded ^(%OUTPUT_EXE%^)
 echo.
 
 :: ====================================================================
-:: Step 3: 打包
+:: Step 3: Package
 :: ====================================================================
 echo ========================================
-echo   Step 3: 打包 ^(exe + DLLs -^> bin/^)
+echo   Step 3: Package ^(exe + DLLs -^> bin/^)
 echo ========================================
 echo.
 
@@ -313,21 +331,21 @@ if not exist "%DIST_DIR%\" mkdir "%DIST_DIR%" 2>nul
 echo   Copying %OUTPUT_EXE% ...
 copy /y "%FRAMEWORK_ROOT%\%OUTPUT_EXE%" "%DIST_DIR%\" >nul
 if !errorlevel! neq 0 (
-    echo [错误] 复制 %OUTPUT_EXE% 失败
+    echo [ERROR] Copy %OUTPUT_EXE% failed
     exit /b 4
 )
 
 echo   Copying php8ts.dll ...
 copy /y "%DLL_PHP%" "%DIST_DIR%\" >nul
 if !errorlevel! neq 0 (
-    echo [错误] 复制 php8ts.dll 失败
+    echo [ERROR] Copy php8ts.dll failed
     exit /b 4
 )
 
 echo   Copying phpx.dll ...
 copy /y "%DLL_PHPX%" "%DIST_DIR%\" >nul
 if !errorlevel! neq 0 (
-    echo [错误] 复制 phpx.dll 失败
+    echo [ERROR] Copy phpx.dll failed
     exit /b 4
 )
 
@@ -339,31 +357,27 @@ echo   ----------------------------------------
 echo.
 
 :: ====================================================================
-:: Step 4: 可选运行验证 (仅 --run 时)
+:: Run (optional)
 :: ====================================================================
 if "%RUN_AFTER%"=="1" (
     echo ========================================
-    echo   Step 4: 运行验证
+    echo   Running %OUTPUT_EXE%...
     echo ========================================
     echo.
-    echo [运行] 启动 %OUTPUT_EXE% 进行验证...
-    start "" "%DIST_DIR%\%OUTPUT_EXE%"
-    timeout /t 3 /nobreak >nul
-    tasklist /FI "IMAGENAME eq %OUTPUT_EXE%" 2>nul | find /i "%OUTPUT_EXE%" >nul
-    if !errorlevel! neq 0 (
-        echo [错误] 进程已退出，可能崩溃
+    "%DIST_DIR%\%OUTPUT_EXE%"
+    set "RUN_EXIT=!errorlevel!"
+    if !RUN_EXIT! neq 0 (
+        echo.
+        echo [ERROR] Runtime crash, exit code: !RUN_EXIT!
         exit /b 5
     )
-    echo [OK] 进程运行正常
-    taskkill /F /IM %OUTPUT_EXE% >nul 2>&1
-    echo.
 )
 
 echo ========================================
-echo   [OK] Build completed successfully
+echo   Build succeeded^!
 echo ========================================
 echo.
-echo   输出目录: %DIST_DIR%\
-echo   运行程序: %DIST_DIR%\%OUTPUT_EXE%
+echo   Output dir: %DIST_DIR%\
+echo   Run: %DIST_DIR%\%OUTPUT_EXE%
 echo ========================================
 exit /b 0
