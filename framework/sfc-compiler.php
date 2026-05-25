@@ -112,13 +112,20 @@ function collectVNodeHandlers(VNode $node, array &$handlers): void
                 }
             }
         }
-        // Also check for keyboard events
-        foreach (['@keyup', '@keydown', '@enter'] as $evt) {
+        // Keyboard events that carry a key code argument (@keydown, @keyup)
+        foreach (['@keyup', '@keydown'] as $evt) {
             if (isset($node->props[$evt])) {
                 $handler = $node->props[$evt];
                 if (!isset($handlers[$handler])) {
-                    $handlers[$handler] = ['hasArg' => false, 'arg' => null];
+                    $handlers[$handler] = ['hasArg' => true, 'arg' => null];
                 }
+            }
+        }
+        // @enter has no argument
+        if (isset($node->props['@enter'])) {
+            $handler = $node->props['@enter'];
+            if (!isset($handlers[$handler])) {
+                $handlers[$handler] = ['hasArg' => false, 'arg' => null];
             }
         }
     }
@@ -388,7 +395,7 @@ function generateDispatchClick(array $handlers): string
 
     $cases = [];
     foreach ($handlers as $handler => $info) {
-        if ($info['hasArg'] && $info['arg'] !== null) {
+        if ($info['hasArg']) {
             $cases[] = "            case '{$handler}': \$this->{$handler}(\$arg); break;";
         } else {
             $cases[] = "            case '{$handler}': \$this->{$handler}(); break;";

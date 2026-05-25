@@ -547,6 +547,12 @@ class Application
                 if ($handler !== '' && $this->rootComponent !== null) {
                     $this->rootComponent->dispatchClick($handler, null);
                 }
+            } else {
+                // @keydown for other keys (pass key code as argument)
+                $handler = $el->props['@keydown'] ?? '';
+                if ($handler !== '' && $this->rootComponent !== null) {
+                    $this->rootComponent->dispatchClick($handler, (string)$wParam);
+                }
             }
         }
 
