@@ -4,6 +4,26 @@
 
 ---
 
+> ## ⚠️ 重要声明 / IMPORTANT NOTICE
+>
+> **本项目是一个 GUI 框架从零演进的实验性探索项目**，目的在于通过编写样例测试应用，主动暴露框架在架构设计、实现细节演进过程中存在的各种问题与能力缺失，借此引发对框架设计的深层思考，反哺架构与工程能力的提升，并落实到具体迭代改进中。
+>
+> - 请勿将其用于任何生产环境
+> - 本项目仅适合作为**缺陷挖掘（bug hunting）**与**反模式识别（anti-pattern discovery）**的测试靶场
+> - 它最大的价值或许是提供了一个**可运行的毛坯框架**，你可以此为基础继续探索、改造、演进
+> - **作者已停止更新本项目**
+>
+> ---
+>
+> **This project is an experimental sandbox for exploring the from-scratch evolution of a GUI framework.** Its purpose is to surface architectural flaws, capability gaps, and design problems through sample test applications — sparking deeper thinking about framework design and driving iterative improvement in both architecture and engineering practice.
+>
+> - Do NOT use in any production environment
+> - This project is intended solely as a testing ground for **bug hunting** and **anti-pattern discovery**
+> - Its greatest value may be as a **runnable bare-bones framework** — a starting point for your own exploration, modification, and evolution
+> - **The author has stopped maintaining this project**
+>
+> ---
+
 ## 核心理念
 
 > 用 PHP 写业务逻辑，用 Vue 3 模板写视图，编译为原生机器码。
